@@ -2,7 +2,7 @@
   "name": "vscode-problems-cleaner",
   "displayName": "Problems Cleaner",
   "description": "Refresh stale VS Code Problems diagnostics, restart stuck diagnostic providers, and hide obsolete entries caused by stale lint/task extensions.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "VladNoskov",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -35,16 +35,7 @@
     "typescript"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onView:problemsCleaner.dashboard",
-    "onCommand:problemsCleaner.refreshProblems",
-    "onCommand:problemsCleaner.hardRefreshProblems",
-    "onCommand:problemsCleaner.showDiagnosticsReport",
-    "onCommand:problemsCleaner.setup",
-    "onCommand:problemsCleaner.manageExtensions",
-    "onCommand:problemsCleaner.addExtensionFromContext",
-    "onCommand:problemsCleaner.refreshProviderFromProblem",
-    "onCommand:problemsCleaner.hardRefreshProviderFromProblem"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -61,6 +52,15 @@
       {
         "command": "problemsCleaner.hardRefreshProblems",
         "title": "Problems Cleaner: Hard Refresh Problems (Restart Extension Host)",
+        "category": "Problems Cleaner",
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
+      },
+      {
+        "command": "problemsCleaner.cancelOperation",
+        "title": "Problems Cleaner: Cancel Operation",
         "category": "Problems Cleaner",
         "icon": {
           "light": "resources/icons/problems-cleaner-light.png",
@@ -136,6 +136,7 @@
         {
           "id": "problemsCleaner.dashboard",
           "name": "Problems Cleaner",
+          "icon": "resources/problems-cleaner.svg",
           "type": "webview"
         }
       ]
@@ -147,6 +148,10 @@
         },
         {
           "command": "problemsCleaner.hardRefreshProblems"
+        },
+        {
+          "command": "problemsCleaner.cancelOperation",
+          "when": "false"
         },
         {
           "command": "problemsCleaner.showDiagnosticsReport"

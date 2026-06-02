@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.1.1
+
+- Added cancellable refresh operations with a **Cancel Operation** command and status-bar hover cancel link while work is running.
+- Added the **Settings** action to the status-bar hover UI so provider setup is always reachable from hover.
+- Prevented overlapping Problems Cleaner refresh operations from running at the same time.
+- Removed redundant generated activation events from the extension manifest.
+- Added the missing Problems Cleaner view icon contribution.
+
 ## 0.1.0
 
 - Initial release of Problems Cleaner.

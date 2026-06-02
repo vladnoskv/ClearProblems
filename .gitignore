@@ -8,3 +8,9 @@
 *.tsbuildinfo
 # Ignore IDE specific files
 .idea/
+*.vsix
+
+# IgnoreKit
+# Added from VS Code Explorer
+/vscode-problems-cleaner-0.1.0.vsix
+# End IgnoreKit

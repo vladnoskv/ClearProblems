@@ -18,6 +18,7 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - let you right-click an installed extension and add its refresh/restart commands to Problems Cleaner;
 - manage refreshed extensions and commands from a visual dashboard;
 - refresh one configured provider from the dashboard, command palette, or Problems row context action when VS Code exposes row context;
+- cancel in-flight Problems Cleaner refresh operations from the progress notification or status-bar hover UI;
 - include theme-aware PNG command/menu icons and a package PNG icon;
 - provide a one-click hard refresh via **Restart Extension Host** or **Reload Window**;
 - add Problems toolbar buttons and a status-bar button for quick access.
@@ -28,10 +29,13 @@ VS Code diagnostics are owned by the extension or task that published them. Prob
 
 VS Code also does not expose a public API to restart only one arbitrary extension. Provider-specific **Restart** first runs that provider's configured refresh/restart commands, then offers Extension Host restart as the hard-refresh fallback.
 
+Cancellation is cooperative. Problems Cleaner stops before starting the next safe step and avoids showing completion messages after cancellation, but it cannot forcibly interrupt a refresh command that is already running inside another extension.
+
 ## Commands
 
 - `Problems Cleaner: Refresh Problems`
 - `Problems Cleaner: Hard Refresh Problems (Restart Extension Host)`
+- `Problems Cleaner: Cancel Operation`
 - `Problems Cleaner: Show Diagnostics Report`
 - `Problems Cleaner: Setup Diagnostic Providers`
 - `Problems Cleaner: Open Dashboard`
@@ -46,11 +50,12 @@ VS Code also does not expose a public API to restart only one arbitrary extensio
 - Use **Show Diagnostics Report** for a detailed source and stale-file report.
 - Use **Hard Refresh** when diagnostics remain stuck after a soft refresh.
 - Use **Setup Providers** to scan installed extensions and add likely diagnostic providers.
+- Use **Cancel Operation** from the progress notification or status-bar hover UI to stop an in-flight Problems Cleaner refresh at the next safe boundary.
 - Use each provider's **Refresh** button to run only that provider's configured refresh/restart commands.
 - Use each provider's **Restart** button when its diagnostics remain stale. VS Code's public API cannot restart only one extension; this action first refreshes that provider, then offers Extension Host restart as the available hard refresh.
 - Right-click an extension in VS Code's Extensions view and choose **Problems Cleaner: Add to Problems Refresh**.
 - Right-click a Problems row and choose **Problems Cleaner: Refresh Provider for Problem** if VS Code exposes the Problems row context menu in your build.
-- Hover the status-bar item for quick refresh/report/hard-refresh links. Provider setup is intentionally handled in the dashboard, not from hover UI.
+- Hover the status-bar item for quick refresh, report, settings, and hard-refresh links. A cancel link appears there while a Problems Cleaner operation is running.
 
 Refreshes only run when the user requests them. There is no file watcher auto-refresh path.
 Manual refresh does not open or focus the Problems panel unless `problemsCleaner.openProblemsAfterRefresh` is explicitly enabled.

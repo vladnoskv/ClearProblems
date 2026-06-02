@@ -74,6 +74,15 @@ let statusBar: vscode.StatusBarItem | undefined;
 let statusUpdateTimer: NodeJS.Timeout | undefined;
 let dashboard: ProblemsCleanerDashboard | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
+let activeOperation: { label: string; cancellation: vscode.CancellationTokenSource } | undefined;
+let lastDiagnosticsSummary: DiagnosticsSummary | undefined;
+
+class OperationCancelledError extends Error {
+  constructor(label: string) {
+    super(`${label} was cancelled.`);
+    this.name = 'OperationCancelledError';
+  }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -85,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     vscode.window.registerWebviewViewProvider('problemsCleaner.dashboard', dashboard),
     vscode.commands.registerCommand('problemsCleaner.refreshProblems', () => refreshProblems(output, 'manual', true)),
+    vscode.commands.registerCommand('problemsCleaner.cancelOperation', () => cancelActiveOperation(output)),
     vscode.commands.registerCommand('problemsCleaner.hardRefreshProblems', () => hardRefreshProblems(output)),
     vscode.commands.registerCommand('problemsCleaner.showDiagnosticsReport', () => showDiagnosticsReport(output)),
     vscode.commands.registerCommand('problemsCleaner.setup', () => runSetup(context, output, true)),
@@ -118,21 +128,30 @@ export function deactivate(): void {
 }
 
 async function refreshProblems(output: vscode.LogOutputChannel, reason: string, showNotification = false): Promise<void> {
-  await vscode.window.withProgress(
+  await withCancellableOperation(
+    'Refresh Problems',
+    output,
     {
       location: showNotification ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
-      title: 'Problems Cleaner',
-      cancellable: false
+      title: 'Problems Cleaner'
     },
-    async (progress) => {
-      await refreshProblemsCore(output, reason, progress, showNotification);
+    async (progress, token) => {
+      await refreshProblemsCore(output, reason, progress, showNotification, token);
     }
   );
 }
 
-async function refreshProblemsCore(output: vscode.LogOutputChannel, reason: string, progress: vscode.Progress<{ message?: string }>, showNotification: boolean): Promise<void> {
+async function refreshProblemsCore(
+  output: vscode.LogOutputChannel,
+  reason: string,
+  progress: vscode.Progress<{ message?: string }>,
+  showNotification: boolean,
+  token: vscode.CancellationToken
+): Promise<void> {
+  throwIfCancelled(token, 'Refresh Problems');
   progress.report({ message: 'Reading diagnostics...' });
   const before = await summarizeDiagnostics();
+  throwIfCancelled(token, 'Refresh Problems');
   output.info(`Soft refresh started. Reason=${reason}. Current diagnostics=${before.total}. Missing-file diagnostics=${before.missingFiles}.`);
 
   const config = vscode.workspace.getConfiguration('problemsCleaner');
@@ -140,18 +159,22 @@ async function refreshProblemsCore(output: vscode.LogOutputChannel, reason: stri
   if (config.get<boolean>('saveAllBeforeRefresh', false)) {
     progress.report({ message: 'Saving open files...' });
     await vscode.workspace.saveAll(false);
+    throwIfCancelled(token, 'Refresh Problems');
   }
 
   progress.report({ message: 'Restarting diagnostic providers...' });
-  const commands = await runConfiguredProviderCommands(output);
+  const commands = await runConfiguredProviderCommands(output, token);
+  throwIfCancelled(token, 'Refresh Problems');
   progress.report({ message: 'Refreshing visible documents...' });
-  await pokeOpenDocuments(output);
+  await pokeOpenDocuments(output, token);
+  throwIfCancelled(token, 'Refresh Problems');
 
   // Give language servers and linters a short turn to republish diagnostics.
   progress.report({ message: 'Waiting for diagnostics to republish...' });
-  await sleep(600);
+  await sleep(600, token, 'Refresh Problems');
 
   const after = await summarizeDiagnostics();
+  throwIfCancelled(token, 'Refresh Problems');
   updateStatusBar(after);
   dashboard?.update(after);
   panelDashboard?.update(after);
@@ -159,6 +182,7 @@ async function refreshProblemsCore(output: vscode.LogOutputChannel, reason: stri
 
   if (config.get<boolean>('openProblemsAfterRefresh', true)) {
     await safeExecute('workbench.actions.view.problems', output);
+    throwIfCancelled(token, 'Refresh Problems');
   }
 
   const message = after.missingFiles > 0
@@ -252,12 +276,12 @@ async function showDiagnosticsReport(output: vscode.LogOutputChannel): Promise<v
   output.show(true);
 }
 
-async function runConfiguredProviderCommands(output: vscode.LogOutputChannel): Promise<CommandRunSummary> {
+async function runConfiguredProviderCommands(output: vscode.LogOutputChannel, token?: vscode.CancellationToken): Promise<CommandRunSummary> {
   const configured = getConfiguredRefreshCommands();
-  return runProviderCommands(configured, output);
+  return runProviderCommands(configured, output, token);
 }
 
-async function runProviderCommands(configured: string[], output: vscode.LogOutputChannel): Promise<CommandRunSummary> {
+async function runProviderCommands(configured: string[], output: vscode.LogOutputChannel, token?: vscode.CancellationToken): Promise<CommandRunSummary> {
   const available = new Set(await vscode.commands.getCommands(true));
   const summary: CommandRunSummary = {
     executed: [],
@@ -266,6 +290,8 @@ async function runProviderCommands(configured: string[], output: vscode.LogOutpu
   };
 
   for (const command of configured) {
+    throwIfCancelled(token, 'Provider Refresh');
+
     if (!command || !available.has(command)) {
       output.debug(`Skipping unavailable provider refresh command: ${command}`);
       summary.skipped.push(command);
@@ -277,33 +303,42 @@ async function runProviderCommands(configured: string[], output: vscode.LogOutpu
     } else {
       summary.failed.push(command);
     }
+
+    throwIfCancelled(token, 'Provider Refresh');
   }
 
   return summary;
 }
 
 async function refreshManagedProvider(provider: ManagedExtensionConfig, output: vscode.LogOutputChannel, showNotification: boolean, targetUri?: vscode.Uri): Promise<void> {
-  await vscode.window.withProgress(
+  const label = provider.label ?? provider.id;
+  await withCancellableOperation(
+    `Refresh ${label}`,
+    output,
     {
       location: showNotification ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
-      title: `Problems Cleaner: ${provider.label ?? provider.id}`,
-      cancellable: false
+      title: `Problems Cleaner: ${label}`
     },
-    async (progress) => {
+    async (progress, token) => {
+      throwIfCancelled(token, `Refresh ${label}`);
       progress.report({ message: 'Reading diagnostics...' });
       const before = await summarizeDiagnostics();
+      throwIfCancelled(token, `Refresh ${label}`);
       const beforeTargetCount = targetUri ? vscode.languages.getDiagnostics(targetUri).length : before.total;
 
       progress.report({ message: 'Running provider refresh commands...' });
-      const commands = await runProviderCommands(provider.commands, output);
+      const commands = await runProviderCommands(provider.commands, output, token);
+      throwIfCancelled(token, `Refresh ${label}`);
 
       progress.report({ message: 'Refreshing visible documents...' });
-      await pokeOpenDocuments(output);
+      await pokeOpenDocuments(output, token);
+      throwIfCancelled(token, `Refresh ${label}`);
 
       progress.report({ message: 'Waiting for diagnostics to republish...' });
-      await sleep(600);
+      await sleep(600, token, `Refresh ${label}`);
 
       const after = await summarizeDiagnostics();
+      throwIfCancelled(token, `Refresh ${label}`);
       const afterTargetCount = targetUri ? vscode.languages.getDiagnostics(targetUri).length : after.total;
       updateStatusBar(after);
       dashboard?.update(after);
@@ -320,6 +355,7 @@ async function refreshManagedProvider(provider: ManagedExtensionConfig, output: 
           'Restart Extension Host',
           'Open Dashboard'
         );
+        throwIfCancelled(token, `Refresh ${label}`);
         if (action === 'Restart Extension Host') {
           await hardRefreshProblems(output);
         } else if (action === 'Open Dashboard') {
@@ -340,9 +376,11 @@ function getConfiguredRefreshCommands(): string[] {
   return uniqueStrings([...legacyCommands, ...managedCommands]);
 }
 
-async function pokeOpenDocuments(output: vscode.LogOutputChannel): Promise<void> {
+async function pokeOpenDocuments(output: vscode.LogOutputChannel, token?: vscode.CancellationToken): Promise<void> {
   // Opening/showing visible documents often causes language servers to re-check current state without a full window reload.
   for (const editor of vscode.window.visibleTextEditors) {
+    throwIfCancelled(token, 'Refresh Problems');
+
     if (editor.document.uri.scheme !== 'file') {
       continue;
     }
@@ -352,6 +390,8 @@ async function pokeOpenDocuments(output: vscode.LogOutputChannel): Promise<void>
     } catch (error) {
       output.debug(`Unable to poke document ${editor.document.uri.toString()}: ${String(error)}`);
     }
+
+    throwIfCancelled(token, 'Refresh Problems');
   }
 }
 
@@ -1629,16 +1669,28 @@ function updateStatusBar(summary?: DiagnosticsSummary): void {
     return;
   }
 
-  if (!summary) {
+  if (summary) {
+    lastDiagnosticsSummary = summary;
+  }
+
+  const current = summary ?? lastDiagnosticsSummary;
+
+  if (activeOperation) {
+    statusBar.text = `$(sync~spin) ${activeOperation.label}`;
+    statusBar.tooltip = createStatusBarTooltip(current);
+    return;
+  }
+
+  if (!current) {
     statusBar.text = '$(refresh) Problems';
     statusBar.tooltip = createStatusBarTooltip();
     return;
   }
 
-  statusBar.text = summary.missingFiles > 0
-    ? `$(refresh) Problems: ${summary.total} (${summary.missingFiles} stale?)`
-    : `$(refresh) Problems: ${summary.total}`;
-  statusBar.tooltip = createStatusBarTooltip(summary);
+  statusBar.text = current.missingFiles > 0
+    ? `$(refresh) Problems: ${current.total} (${current.missingFiles} stale?)`
+    : `$(refresh) Problems: ${current.total}`;
+  statusBar.tooltip = createStatusBarTooltip(current);
 }
 
 function createStatusBarTooltip(summary?: DiagnosticsSummary): vscode.MarkdownString {
@@ -1651,18 +1703,93 @@ function createStatusBarTooltip(summary?: DiagnosticsSummary): vscode.MarkdownSt
     '',
     '[$(refresh) Refresh Problems](command:problemsCleaner.refreshProblems)',
     '[$(list-unordered) Show Report](command:problemsCleaner.showDiagnosticsReport)',
+    '[$(settings-gear) Settings](command:problemsCleaner.setup)',
     '[$(debug-restart) Hard Refresh](command:problemsCleaner.hardRefreshProblems)'
   ];
+
+  if (activeOperation) {
+    lines.push('', `[$(circle-slash) Cancel ${activeOperation.label}](command:problemsCleaner.cancelOperation)`);
+  }
 
   const tooltip = new vscode.MarkdownString(lines.join('\n\n'), true);
   tooltip.isTrusted = {
     enabledCommands: [
       'problemsCleaner.refreshProblems',
       'problemsCleaner.showDiagnosticsReport',
+      'problemsCleaner.setup',
+      'problemsCleaner.cancelOperation',
       'problemsCleaner.hardRefreshProblems'
     ]
   };
   return tooltip;
+}
+
+async function withCancellableOperation(
+  label: string,
+  output: vscode.LogOutputChannel,
+  options: Omit<vscode.ProgressOptions, 'cancellable'>,
+  operation: (progress: vscode.Progress<{ message?: string }>, token: vscode.CancellationToken) => Promise<void>
+): Promise<void> {
+  if (activeOperation) {
+    void vscode.window.showWarningMessage(`${activeOperation.label} is already running. Cancel it before starting another Problems Cleaner operation.`);
+    return;
+  }
+
+  const cancellation = new vscode.CancellationTokenSource();
+  activeOperation = { label, cancellation };
+  updateStatusBar();
+
+  try {
+    await vscode.window.withProgress(
+      { ...options, cancellable: true },
+      async (progress, progressToken) => {
+        const subscription = progressToken.onCancellationRequested(() => cancelActiveOperation(output));
+        try {
+          await operation(progress, cancellation.token);
+        } finally {
+          subscription.dispose();
+        }
+      }
+    );
+  } catch (error) {
+    if (!isOperationCancelledError(error)) {
+      throw error;
+    }
+
+    output.info(`${label} cancelled.`);
+    vscode.window.setStatusBarMessage(`$(circle-slash) ${label} cancelled.`, 5000);
+  } finally {
+    if (activeOperation?.cancellation === cancellation) {
+      activeOperation = undefined;
+    }
+    cancellation.dispose();
+    updateStatusBar();
+  }
+}
+
+function cancelActiveOperation(output?: vscode.LogOutputChannel): void {
+  if (!activeOperation) {
+    void vscode.window.showInformationMessage('No Problems Cleaner operation is running.');
+    return;
+  }
+
+  const { label, cancellation } = activeOperation;
+  if (!cancellation.token.isCancellationRequested) {
+    output?.info(`Cancellation requested for ${label}.`);
+    vscode.window.setStatusBarMessage(`$(circle-slash) Cancelling ${label}...`, 3000);
+    cancellation.cancel();
+    updateStatusBar();
+  }
+}
+
+function throwIfCancelled(token: vscode.CancellationToken | undefined, label: string): void {
+  if (token?.isCancellationRequested) {
+    throw new OperationCancelledError(label);
+  }
+}
+
+function isOperationCancelledError(error: unknown): error is OperationCancelledError {
+  return error instanceof OperationCancelledError;
 }
 
 async function safeExecute(command: string, output: vscode.LogOutputChannel): Promise<boolean> {
@@ -1676,6 +1803,18 @@ async function safeExecute(command: string, output: vscode.LogOutputChannel): Pr
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, token?: vscode.CancellationToken, label = 'Operation'): Promise<void> {
+  throwIfCancelled(token, label);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      subscription.dispose();
+      resolve();
+    }, ms);
+    const subscription = token?.onCancellationRequested(() => {
+      clearTimeout(timeout);
+      subscription.dispose();
+      reject(new OperationCancelledError(label));
+    }) ?? { dispose: () => undefined };
+  });
 }
