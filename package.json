@@ -1,0 +1,143 @@
+{
+  "name": "vscode-problems-cleaner",
+  "displayName": "Problems Cleaner",
+  "description": "Refresh stale VS Code Problems diagnostics, restart stuck diagnostic providers, and hide obsolete entries caused by stale lint/task extensions.",
+  "version": "0.1.0",
+  "publisher": "predictduel",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Linters"
+  ],
+  "keywords": [
+    "problems",
+    "diagnostics",
+    "lint",
+    "stale",
+    "refresh",
+    "eslint",
+    "typescript"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:problemsCleaner.refreshProblems",
+    "onCommand:problemsCleaner.hardRefreshProblems",
+    "onCommand:problemsCleaner.showDiagnosticsReport"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "problemsCleaner.refreshProblems",
+        "title": "Problems Cleaner: Refresh Problems",
+        "category": "Problems Cleaner",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "problemsCleaner.hardRefreshProblems",
+        "title": "Problems Cleaner: Hard Refresh Problems (Restart Extension Host)",
+        "category": "Problems Cleaner",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "problemsCleaner.showDiagnosticsReport",
+        "title": "Problems Cleaner: Show Diagnostics Report",
+        "category": "Problems Cleaner",
+        "icon": "$(list-unordered)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "problemsCleaner.refreshProblems"
+        },
+        {
+          "command": "problemsCleaner.hardRefreshProblems"
+        },
+        {
+          "command": "problemsCleaner.showDiagnosticsReport"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "problemsCleaner.refreshProblems",
+          "when": "view == workbench.panel.markers",
+          "group": "navigation@100"
+        },
+        {
+          "command": "problemsCleaner.hardRefreshProblems",
+          "when": "view == workbench.panel.markers",
+          "group": "navigation@101"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Problems Cleaner",
+      "properties": {
+        "problemsCleaner.showStatusBarButton": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a status bar button for refreshing Problems diagnostics."
+        },
+        "problemsCleaner.autoRefreshOnFileDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run a soft diagnostics refresh when files are deleted or renamed in the workspace."
+        },
+        "problemsCleaner.autoRefreshDebounceMs": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 250,
+          "maximum": 30000,
+          "description": "Debounce time before auto-refreshing after file delete/create events."
+        },
+        "problemsCleaner.saveAllBeforeRefresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save all open files before running refresh commands."
+        },
+        "problemsCleaner.providerRefreshCommands": {
+          "type": "array",
+          "default": [
+            "typescript.restartTsServer",
+            "eslint.restart",
+            "stylelint.restart"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Command IDs to run during soft refresh. Missing commands are ignored. Add language/linter restart commands here."
+        },
+        "problemsCleaner.hardRefreshMode": {
+          "type": "string",
+          "enum": [
+            "restartExtensionHost",
+            "reloadWindow"
+          ],
+          "default": "restartExtensionHost",
+          "description": "Hard refresh strategy. Restart Extension Host is less disruptive than Reload Window when supported."
+        },
+        "problemsCleaner.openProblemsAfterRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open/focus the Problems panel after refreshing."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.6.3",
+    "@vscode/vsce": "^3.2.1"
+  }
+}
