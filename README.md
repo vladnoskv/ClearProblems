@@ -14,7 +14,8 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - add a **Problems Cleaner** Activity Bar view with refresh, report, and hard-refresh buttons;
 - run a first-install setup flow that auto-detects likely diagnostic/lint extensions;
 - let you right-click an installed extension and add its refresh/restart commands to Problems Cleaner;
-- manage refreshed extensions and commands from a visual settings dashboard;
+- manage refreshed extensions and commands from a visual dashboard;
+- refresh one configured provider from the dashboard, command palette, or Problems row context action when VS Code exposes row context;
 - provide a one-click hard refresh via **Restart Extension Host** or **Reload Window**;
 - add Problems toolbar buttons and a status-bar button for quick access.
 
@@ -24,8 +25,10 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - `Problems Cleaner: Hard Refresh Problems (Restart Extension Host)`
 - `Problems Cleaner: Show Diagnostics Report`
 - `Problems Cleaner: Setup Diagnostic Providers`
-- `Problems Cleaner: Manage Refreshed Extensions`
+- `Problems Cleaner: Open Dashboard`
 - `Problems Cleaner: Add to Problems Refresh`
+- `Problems Cleaner: Refresh Provider for Problem`
+- `Problems Cleaner: Restart Provider for Problem`
 
 ## UI
 
@@ -34,10 +37,13 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - Use **Show Diagnostics Report** for a detailed source and stale-file report.
 - Use **Hard Refresh** when diagnostics remain stuck after a soft refresh.
 - Use **Setup Providers** to scan installed extensions and add likely diagnostic providers.
+- Use each provider's **Refresh** button to run only that provider's configured refresh/restart commands.
+- Use each provider's **Restart** button when its diagnostics remain stale. VS Code's public API cannot restart only one extension; this action first refreshes that provider, then offers Extension Host restart as the available hard refresh.
 - Right-click an extension in VS Code's Extensions view and choose **Problems Cleaner: Add to Problems Refresh**.
+- Right-click a Problems row and choose **Problems Cleaner: Refresh Provider for Problem** if VS Code exposes the Problems row context menu in your build.
 - Hover the status-bar item for quick command links. VS Code's public extension API supports Markdown tooltips there, not the same private rich hover surface used by some built-in/Copilot UI.
 
-Manual refreshes show progress and a completion message. Automatic file watcher refreshes stay quiet.
+Refreshes only run when the user requests them. There is no file watcher auto-refresh path.
 
 ## Settings
 
@@ -52,21 +58,11 @@ Manual refreshes show progress and a completion message. Automatic file watcher 
     "python.analysis.restartLanguageServer"
   ],
   "problemsCleaner.hardRefreshMode": "restartExtensionHost",
-  "problemsCleaner.autoRefreshOnFileDelete": true,
-  "problemsCleaner.showStatusBarButton": true,
-  "problemsCleaner.managedExtensions": [
-    {
-      "id": "dbaeumer.vscode-eslint",
-      "label": "ESLint",
-      "enabled": true,
-      "commands": ["eslint.restart"],
-      "autoDiscovered": true
-    }
-  ]
+  "problemsCleaner.showStatusBarButton": true
 }
 ```
 
-Add more provider restart commands if your stack has them.
+Provider selections are saved by the extension and managed from the dashboard, not by editing `settings.json`.
 
 ## Development
 

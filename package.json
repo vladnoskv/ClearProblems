@@ -29,7 +29,9 @@
     "onCommand:problemsCleaner.showDiagnosticsReport",
     "onCommand:problemsCleaner.setup",
     "onCommand:problemsCleaner.manageExtensions",
-    "onCommand:problemsCleaner.addExtensionFromContext"
+    "onCommand:problemsCleaner.addExtensionFromContext",
+    "onCommand:problemsCleaner.refreshProviderFromProblem",
+    "onCommand:problemsCleaner.hardRefreshProviderFromProblem"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -60,7 +62,7 @@
       },
       {
         "command": "problemsCleaner.manageExtensions",
-        "title": "Problems Cleaner: Manage Refreshed Extensions",
+        "title": "Problems Cleaner: Open Dashboard",
         "category": "Problems Cleaner",
         "icon": "$(extensions)"
       },
@@ -69,6 +71,18 @@
         "title": "Problems Cleaner: Add to Problems Refresh",
         "category": "Problems Cleaner",
         "icon": "$(add)"
+      },
+      {
+        "command": "problemsCleaner.refreshProviderFromProblem",
+        "title": "Problems Cleaner: Refresh Provider for Problem",
+        "category": "Problems Cleaner",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "problemsCleaner.hardRefreshProviderFromProblem",
+        "title": "Problems Cleaner: Restart Provider for Problem",
+        "category": "Problems Cleaner",
+        "icon": "$(debug-restart)"
       }
     ],
     "viewsContainers": {
@@ -105,12 +119,30 @@
         },
         {
           "command": "problemsCleaner.manageExtensions"
+        },
+        {
+          "command": "problemsCleaner.refreshProviderFromProblem"
+        },
+        {
+          "command": "problemsCleaner.hardRefreshProviderFromProblem"
         }
       ],
       "extension/context": [
         {
           "command": "problemsCleaner.addExtensionFromContext",
           "group": "2_configure@90"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "problemsCleaner.refreshProviderFromProblem",
+          "when": "resourceScheme == file",
+          "group": "navigation@98"
+        },
+        {
+          "command": "problemsCleaner.hardRefreshProviderFromProblem",
+          "when": "resourceScheme == file",
+          "group": "navigation@99"
         }
       ],
       "view/title": [
@@ -144,18 +176,6 @@
           "default": true,
           "description": "Show a status bar button for refreshing Problems diagnostics."
         },
-        "problemsCleaner.autoRefreshOnFileDelete": {
-          "type": "boolean",
-          "default": true,
-          "description": "Run a soft diagnostics refresh when files are deleted or renamed in the workspace."
-        },
-        "problemsCleaner.autoRefreshDebounceMs": {
-          "type": "number",
-          "default": 1500,
-          "minimum": 250,
-          "maximum": 30000,
-          "description": "Debounce time before auto-refreshing after file delete/create events."
-        },
         "problemsCleaner.saveAllBeforeRefresh": {
           "type": "boolean",
           "default": false,
@@ -175,45 +195,6 @@
             "type": "string"
           },
           "description": "Command IDs to run during soft refresh. Missing commands are ignored. Add language/linter restart commands here."
-        },
-        "problemsCleaner.managedExtensions": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "object",
-            "required": [
-              "id",
-              "commands"
-            ],
-            "properties": {
-              "id": {
-                "type": "string",
-                "description": "Extension identifier, for example dbaeumer.vscode-eslint."
-              },
-              "label": {
-                "type": "string",
-                "description": "Display label shown in Problems Cleaner."
-              },
-              "enabled": {
-                "type": "boolean",
-                "default": true,
-                "description": "Whether this extension should be included in soft refresh."
-              },
-              "commands": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Refresh/restart command IDs to run for this extension."
-              },
-              "autoDiscovered": {
-                "type": "boolean",
-                "default": false,
-                "description": "Whether Problems Cleaner added this entry during setup."
-              }
-            }
-          },
-          "description": "Extensions and extension-owned commands included in Problems Cleaner soft refresh."
         },
         "problemsCleaner.showSetupOnFirstInstall": {
           "type": "boolean",

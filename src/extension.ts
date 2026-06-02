@@ -42,6 +42,7 @@ interface ExtensionCandidate {
 
 const EXTENSION_NAME = 'Problems Cleaner';
 const SETUP_STATE_KEY = 'problemsCleaner.setupPromptShown';
+const MANAGED_EXTENSIONS_STATE_KEY = 'problemsCleaner.managedExtensions';
 const DIAGNOSTIC_KEYWORDS = [
   'biome',
   'checker',
@@ -70,13 +71,15 @@ const REFRESH_COMMAND_KEYWORDS = [
   'sync'
 ];
 let statusBar: vscode.StatusBarItem | undefined;
-let refreshTimer: NodeJS.Timeout | undefined;
 let statusUpdateTimer: NodeJS.Timeout | undefined;
 let dashboard: ProblemsCleanerDashboard | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  extensionContext = context;
   const output = vscode.window.createOutputChannel(EXTENSION_NAME, { log: true });
   dashboard = new ProblemsCleanerDashboard(context.extensionUri, output);
+  panelDashboard = new ProblemsCleanerPanelDashboard(context.extensionUri, output);
 
   context.subscriptions.push(
     output,
@@ -85,13 +88,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('problemsCleaner.hardRefreshProblems', () => hardRefreshProblems(output)),
     vscode.commands.registerCommand('problemsCleaner.showDiagnosticsReport', () => showDiagnosticsReport(output)),
     vscode.commands.registerCommand('problemsCleaner.setup', () => runSetup(context, output, true)),
-    vscode.commands.registerCommand('problemsCleaner.manageExtensions', () => openManager()),
-    vscode.commands.registerCommand('problemsCleaner.addExtensionFromContext', (item) => addExtensionFromContext(item, output))
+    vscode.commands.registerCommand('problemsCleaner.manageExtensions', () => openManager(context.extensionUri, output)),
+    vscode.commands.registerCommand('problemsCleaner.addExtensionFromContext', (item) => addExtensionFromContext(item, output)),
+    vscode.commands.registerCommand('problemsCleaner.refreshProviderFromProblem', (item) => refreshProviderFromProblem(item, output)),
+    vscode.commands.registerCommand('problemsCleaner.hardRefreshProviderFromProblem', (item) => hardRefreshProviderFromProblem(item, output))
   );
 
   setupStatusBar(context);
-  setupWorkspaceWatchers(context, output);
-  setupDiagnosticsStatusUpdates(context);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -109,9 +112,6 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
-  }
   if (statusUpdateTimer) {
     clearTimeout(statusUpdateTimer);
   }
@@ -154,6 +154,7 @@ async function refreshProblemsCore(output: vscode.LogOutputChannel, reason: stri
   const after = await summarizeDiagnostics();
   updateStatusBar(after);
   dashboard?.update(after);
+  panelDashboard?.update(after);
   output.info(`Soft refresh finished. Before=${before.total}. After=${after.total}. Missing-file diagnostics=${after.missingFiles}. Commands executed=${commands.executed.length}. Skipped=${commands.skipped.length}. Failed=${commands.failed.length}.`);
 
   if (config.get<boolean>('openProblemsAfterRefresh', true)) {
@@ -253,7 +254,10 @@ async function showDiagnosticsReport(output: vscode.LogOutputChannel): Promise<v
 
 async function runConfiguredProviderCommands(output: vscode.LogOutputChannel): Promise<CommandRunSummary> {
   const configured = getConfiguredRefreshCommands();
+  return runProviderCommands(configured, output);
+}
 
+async function runProviderCommands(configured: string[], output: vscode.LogOutputChannel): Promise<CommandRunSummary> {
   const available = new Set(await vscode.commands.getCommands(true));
   const summary: CommandRunSummary = {
     executed: [],
@@ -276,6 +280,54 @@ async function runConfiguredProviderCommands(output: vscode.LogOutputChannel): P
   }
 
   return summary;
+}
+
+async function refreshManagedProvider(provider: ManagedExtensionConfig, output: vscode.LogOutputChannel, showNotification: boolean, targetUri?: vscode.Uri): Promise<void> {
+  await vscode.window.withProgress(
+    {
+      location: showNotification ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
+      title: `Problems Cleaner: ${provider.label ?? provider.id}`,
+      cancellable: false
+    },
+    async (progress) => {
+      progress.report({ message: 'Reading diagnostics...' });
+      const before = await summarizeDiagnostics();
+      const beforeTargetCount = targetUri ? vscode.languages.getDiagnostics(targetUri).length : before.total;
+
+      progress.report({ message: 'Running provider refresh commands...' });
+      const commands = await runProviderCommands(provider.commands, output);
+
+      progress.report({ message: 'Refreshing visible documents...' });
+      await pokeOpenDocuments(output);
+
+      progress.report({ message: 'Waiting for diagnostics to republish...' });
+      await sleep(600);
+
+      const after = await summarizeDiagnostics();
+      const afterTargetCount = targetUri ? vscode.languages.getDiagnostics(targetUri).length : after.total;
+      updateStatusBar(after);
+      dashboard?.update(after);
+      panelDashboard?.update(after);
+
+      const scope = targetUri ? `file diagnostics ${beforeTargetCount} -> ${afterTargetCount}` : `diagnostics ${before.total} -> ${after.total}`;
+      const message = `${provider.label ?? provider.id}: executed ${commands.executed.length} command${commands.executed.length === 1 ? '' : 's'}; ${scope}.`;
+      output.info(message);
+      if (showNotification) {
+        const action = await vscode.window.showInformationMessage(
+          afterTargetCount >= beforeTargetCount
+            ? `${message} If this provider is still stale, restart the Extension Host.`
+            : message,
+          'Restart Extension Host',
+          'Open Dashboard'
+        );
+        if (action === 'Restart Extension Host') {
+          await hardRefreshProblems(output);
+        } else if (action === 'Open Dashboard') {
+          openManager(extensionContext?.extensionUri, output);
+        }
+      }
+    }
+  );
 }
 
 function getConfiguredRefreshCommands(): string[] {
@@ -394,7 +446,7 @@ async function runSetup(context: vscode.ExtensionContext, output: vscode.LogOutp
   if (suggested.length === 0) {
     await context.globalState.update(SETUP_STATE_KEY, true);
     void vscode.window.showInformationMessage('Problems Cleaner did not find installed extensions with obvious refresh or restart commands.');
-    openManager();
+    openManager(context.extensionUri, output);
     return;
   }
 
@@ -416,7 +468,7 @@ async function runSetup(context: vscode.ExtensionContext, output: vscode.LogOutp
     : suggested.map((candidate) => ({ candidate }));
 
   if (!picked || picked.length === 0) {
-    openManager();
+    openManager(context.extensionUri, output);
     return;
   }
 
@@ -431,8 +483,9 @@ async function runSetup(context: vscode.ExtensionContext, output: vscode.LogOutp
   await context.globalState.update(SETUP_STATE_KEY, true);
   output.info(`Setup added ${picked.length} extension provider entries.`);
   dashboard?.refreshModel();
+  panelDashboard?.update();
   void vscode.window.showInformationMessage(`Problems Cleaner added ${picked.length} extension provider${picked.length === 1 ? '' : 's'} to refresh.`);
-  openManager();
+  openManager(context.extensionUri, output);
 }
 
 async function addExtensionFromContext(item: unknown, output: vscode.LogOutputChannel): Promise<void> {
@@ -449,6 +502,181 @@ async function addExtensionFromContext(item: unknown, output: vscode.LogOutputCh
   }
 
   await addExtensionWithCommandPicker(extension, output);
+}
+
+async function refreshProviderFromProblem(item: unknown, output: vscode.LogOutputChannel): Promise<void> {
+  const targetUri = resolveUriFromContext(item);
+  const provider = await pickProviderForProblem(item, targetUri);
+  if (!provider) {
+    return;
+  }
+
+  await refreshManagedProvider(provider, output, true, targetUri);
+}
+
+async function hardRefreshProviderFromProblem(item: unknown, output: vscode.LogOutputChannel): Promise<void> {
+  const targetUri = resolveUriFromContext(item);
+  const provider = await pickProviderForProblem(item, targetUri);
+  if (!provider) {
+    return;
+  }
+
+  if (provider.commands.length > 0) {
+    await refreshManagedProvider(provider, output, true, targetUri);
+  }
+
+  const action = await vscode.window.showWarningMessage(
+    `VS Code does not expose a public API to restart only ${provider.label ?? provider.id}. Restarting the Extension Host is the available hard refresh and affects all extensions.`,
+    { modal: true },
+    'Restart Extension Host',
+    'Open Dashboard'
+  );
+
+  if (action === 'Restart Extension Host') {
+    await hardRefreshProblems(output);
+  } else if (action === 'Open Dashboard') {
+    openManager(extensionContext?.extensionUri, output);
+  }
+}
+
+async function refreshManagedProviderById(id: string, output: vscode.LogOutputChannel): Promise<void> {
+  const provider = getManagedExtensions().find((candidate) => candidate.id.toLowerCase() === id.toLowerCase());
+  if (!provider) {
+    void vscode.window.showWarningMessage(`Problems Cleaner could not find provider ${id}.`);
+    return;
+  }
+
+  await refreshManagedProvider(provider, output, true);
+}
+
+async function hardRefreshManagedProviderById(id: string, output: vscode.LogOutputChannel): Promise<void> {
+  const provider = getManagedExtensions().find((candidate) => candidate.id.toLowerCase() === id.toLowerCase());
+  if (!provider) {
+    void vscode.window.showWarningMessage(`Problems Cleaner could not find provider ${id}.`);
+    return;
+  }
+
+  await hardRefreshProviderFromProblem({ source: provider.label ?? provider.id }, output);
+}
+
+async function pickProviderForProblem(item: unknown, targetUri?: vscode.Uri): Promise<ManagedExtensionConfig | undefined> {
+  const providers = getManagedExtensions().filter((provider) => provider.enabled !== false);
+  if (providers.length === 0) {
+    const action = await vscode.window.showInformationMessage(
+      'No Problems Cleaner providers are configured yet.',
+      'Open Dashboard'
+    );
+    if (action === 'Open Dashboard') {
+      openManager(extensionContext?.extensionUri);
+    }
+    return undefined;
+  }
+
+  const source = resolveDiagnosticSourceFromContext(item) ?? resolveDiagnosticSourceFromUri(targetUri);
+  const matched = source ? matchProviderBySource(source, providers) : undefined;
+  if (matched) {
+    return matched;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    providers.map((provider) => ({
+      label: provider.label ?? provider.id,
+      description: provider.id,
+      detail: provider.commands.length > 0 ? provider.commands.join(', ') : 'No provider commands configured',
+      provider
+    })),
+    {
+      title: source ? `No provider matched source "${source}"` : 'Choose provider to refresh',
+      placeHolder: 'Select the extension/provider that owns this problem'
+    }
+  );
+
+  return picked?.provider;
+}
+
+function resolveDiagnosticSourceFromContext(item: unknown): string | undefined {
+  if (!item || typeof item !== 'object') {
+    return undefined;
+  }
+
+  const direct = findStringProperty(item, ['source', 'owner', 'code', 'message']);
+  if (direct && direct.length <= 80) {
+    return direct;
+  }
+
+  const record = item as Record<string, unknown>;
+  for (const value of Object.values(record)) {
+    if (value && typeof value === 'object') {
+      const nested = findStringProperty(value, ['source', 'owner']);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function resolveDiagnosticSourceFromUri(uri?: vscode.Uri): string | undefined {
+  if (!uri) {
+    return undefined;
+  }
+
+  const diagnostics = vscode.languages.getDiagnostics(uri);
+  const activeLine = vscode.window.activeTextEditor?.selection.active.line;
+  const lineDiagnostics = typeof activeLine === 'number'
+    ? diagnostics.filter((diagnostic) => diagnostic.range.start.line <= activeLine && diagnostic.range.end.line >= activeLine)
+    : [];
+  const candidate = lineDiagnostics[0] ?? diagnostics[0];
+  return candidate?.source;
+}
+
+function resolveUriFromContext(item: unknown): vscode.Uri | undefined {
+  if (item instanceof vscode.Uri) {
+    return item;
+  }
+
+  if (item && typeof item === 'object') {
+    const record = item as Record<string, unknown>;
+    const uri = record.resourceUri ?? record.uri;
+    if (uri instanceof vscode.Uri) {
+      return uri;
+    }
+  }
+
+  return vscode.window.activeTextEditor?.document.uri;
+}
+
+function matchProviderBySource(source: string, providers: ManagedExtensionConfig[]): ManagedExtensionConfig | undefined {
+  const normalized = normalizeName(source);
+  return providers.find((provider) => {
+    const haystack = [
+      provider.id,
+      provider.label ?? '',
+      provider.commands.join(' ')
+    ].map(normalizeName).join(' ');
+    return haystack.includes(normalized) || normalized.includes(normalizeName(provider.label ?? provider.id));
+  });
+}
+
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function findStringProperty(item: unknown, keys: string[]): string | undefined {
+  if (!item || typeof item !== 'object') {
+    return undefined;
+  }
+
+  const record = item as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
 }
 
 async function addExtensionByPicker(output: vscode.LogOutputChannel): Promise<void> {
@@ -530,8 +758,11 @@ async function addExtensionWithCommandPicker(extension: vscode.Extension<unknown
 
   output.info(`Added managed extension ${extension.id} with ${picked.length} commands.`);
   dashboard?.refreshModel();
+  panelDashboard?.update();
   void vscode.window.showInformationMessage(`Added ${getExtensionLabel(extension)} to Problems Refresh.`);
-  openManager();
+  if (extensionContext) {
+    openManager(extensionContext.extensionUri, output);
+  }
 }
 
 function resolveExtensionIdFromContext(item: unknown): string | undefined {
@@ -659,10 +890,28 @@ function getExtensionLabel(extension: vscode.Extension<unknown>): string {
 }
 
 function getManagedExtensions(): ManagedExtensionConfig[] {
-  return vscode.workspace
+  const storedRaw = extensionContext?.globalState.get<ManagedExtensionConfig[] | undefined>(MANAGED_EXTENSIONS_STATE_KEY);
+  const configured = vscode.workspace
     .getConfiguration('problemsCleaner')
-    .get<ManagedExtensionConfig[]>('managedExtensions', [])
-    .filter((extension) => typeof extension.id === 'string' && Array.isArray(extension.commands));
+    .get<ManagedExtensionConfig[]>('managedExtensions', []);
+  const source = storedRaw ?? configured;
+  const byId = new Map<string, ManagedExtensionConfig>();
+
+  for (const extension of source) {
+    if (typeof extension.id !== 'string' || !Array.isArray(extension.commands)) {
+      continue;
+    }
+
+    const key = extension.id.toLowerCase();
+    const current = byId.get(key);
+    byId.set(key, {
+      ...current,
+      ...extension,
+      commands: uniqueStrings([...(current?.commands ?? []), ...extension.commands])
+    });
+  }
+
+  return [...byId.values()];
 }
 
 async function upsertManagedExtensions(entries: ManagedExtensionConfig[]): Promise<void> {
@@ -684,14 +933,13 @@ async function upsertManagedExtensions(entries: ManagedExtensionConfig[]): Promi
 }
 
 async function updateManagedExtensions(entries: ManagedExtensionConfig[]): Promise<void> {
-  await vscode.workspace
-    .getConfiguration('problemsCleaner')
-    .update('managedExtensions', entries, vscode.ConfigurationTarget.Global);
+  await extensionContext?.globalState.update(MANAGED_EXTENSIONS_STATE_KEY, entries);
 }
 
 async function removeManagedExtension(id: string): Promise<void> {
   await updateManagedExtensions(getManagedExtensions().filter((extension) => extension.id.toLowerCase() !== id.toLowerCase()));
   dashboard?.refreshModel();
+  panelDashboard?.update();
 }
 
 async function toggleManagedExtension(id: string): Promise<void> {
@@ -700,6 +948,7 @@ async function toggleManagedExtension(id: string): Promise<void> {
     : extension);
   await updateManagedExtensions(entries);
   dashboard?.refreshModel();
+  panelDashboard?.update();
 }
 
 async function removeManagedCommand(id: string, command: string): Promise<void> {
@@ -708,6 +957,7 @@ async function removeManagedCommand(id: string, command: string): Promise<void> 
     : extension);
   await updateManagedExtensions(entries);
   dashboard?.refreshModel();
+  panelDashboard?.update();
 }
 
 async function addCommandToManagedExtension(id: string): Promise<void> {
@@ -740,10 +990,23 @@ async function addCommandToManagedExtension(id: string): Promise<void> {
     autoDiscovered: existing?.autoDiscovered ?? false
   }]);
   dashboard?.refreshModel();
+  panelDashboard?.update();
 }
 
-function openManager(): void {
-  void vscode.commands.executeCommand('workbench.view.extension.problemsCleaner');
+function openManager(_extensionUri?: vscode.Uri, _output?: vscode.LogOutputChannel): void {
+  const context = extensionContext;
+  if (!context) {
+    return;
+  }
+
+  if (!panelDashboard) {
+    panelDashboard = new ProblemsCleanerPanelDashboard(context.extensionUri, _output ?? vscode.window.createOutputChannel(EXTENSION_NAME, { log: true }));
+  }
+  panelDashboard.show();
+  void vscode.commands.executeCommand('workbench.view.extension.problemsCleaner').then(
+    undefined,
+    () => undefined
+  );
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -773,56 +1036,9 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [this.extensionUri]
     };
-    view.webview.html = this.render(view.webview);
+    view.webview.html = renderDashboardHtml(view.webview);
 
-    view.webview.onDidReceiveMessage((message: { command?: string }) => {
-      switch (message.command) {
-        case 'refresh':
-          void refreshProblems(this.output, 'dashboard', true);
-          break;
-        case 'hardRefresh':
-          void hardRefreshProblems(this.output);
-          break;
-        case 'report':
-          void showDiagnosticsReport(this.output);
-          break;
-        case 'setup':
-          void vscode.commands.executeCommand('problemsCleaner.setup');
-          break;
-        case 'addExtension':
-          void addExtensionByPicker(this.output);
-          break;
-        case 'manageExtensions':
-          void vscode.commands.executeCommand('workbench.view.extensions');
-          break;
-      }
-    });
-
-    view.webview.onDidReceiveMessage((message: { command?: string; id?: string; refreshCommand?: string }) => {
-      if (!message.id) {
-        return;
-      }
-
-      switch (message.command) {
-        case 'toggleExtension':
-          void toggleManagedExtension(message.id);
-          break;
-        case 'removeExtension':
-          void removeManagedExtension(message.id);
-          break;
-        case 'addCommand':
-          void addCommandToManagedExtension(message.id);
-          break;
-        case 'configureExtension':
-          void configureExtensionById(message.id, this.output);
-          break;
-        case 'removeCommand':
-          if (message.refreshCommand) {
-            void removeManagedCommand(message.id, message.refreshCommand);
-          }
-          break;
-      }
-    });
+    registerDashboardMessageHandler(view.webview, this.output);
 
     void this.update();
   }
@@ -843,8 +1059,10 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
     void this.update();
   }
 
-  private render(webview: vscode.Webview): string {
-    const nonce = getNonce();
+}
+
+function renderDashboardHtml(webview: vscode.Webview): string {
+  const nonce = getNonce();
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -1076,12 +1294,16 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
         const buttons = document.createElement('div');
         buttons.className = 'button-row';
         const toggle = miniButton(extension.enabled ? 'Disable' : 'Enable');
+        const refresh = miniButton('Refresh');
+        const restart = miniButton('Restart');
         const addCommand = miniButton('Add Command');
         const remove = miniButton('Remove');
         toggle.addEventListener('click', () => vscode.postMessage({ command: 'toggleExtension', id: extension.id }));
+        refresh.addEventListener('click', () => vscode.postMessage({ command: 'refreshExtension', id: extension.id }));
+        restart.addEventListener('click', () => vscode.postMessage({ command: 'restartExtension', id: extension.id }));
         addCommand.addEventListener('click', () => vscode.postMessage({ command: 'addCommand', id: extension.id }));
         remove.addEventListener('click', () => vscode.postMessage({ command: 'removeExtension', id: extension.id }));
-        buttons.append(toggle, addCommand, remove);
+        buttons.append(toggle, refresh, restart, addCommand, remove);
         item.appendChild(buttons);
         root.appendChild(item);
       }
@@ -1154,7 +1376,114 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
   </script>
 </body>
 </html>`;
+}
+
+class ProblemsCleanerPanelDashboard {
+  private panel: vscode.WebviewPanel | undefined;
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly output: vscode.LogOutputChannel
+  ) {}
+
+  show(): void {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      void this.update();
+      return;
+    }
+
+    this.panel = vscode.window.createWebviewPanel(
+      'problemsCleaner.dashboardPanel',
+      'Problems Cleaner',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        localResourceRoots: [this.extensionUri],
+        retainContextWhenHidden: true
+      }
+    );
+    this.panel.webview.html = renderDashboardHtml(this.panel.webview);
+    registerDashboardMessageHandler(this.panel.webview, this.output);
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+    void this.update();
   }
+
+  async update(summary?: DiagnosticsSummary): Promise<void> {
+    if (!this.panel) {
+      return;
+    }
+
+    const current = summary ?? await summarizeDiagnostics();
+    await this.panel.webview.postMessage({
+      type: 'model',
+      model: await toDashboardModel(current)
+    });
+  }
+}
+
+let panelDashboard: ProblemsCleanerPanelDashboard | undefined;
+
+function registerDashboardMessageHandler(webview: vscode.Webview, output: vscode.LogOutputChannel): void {
+  webview.onDidReceiveMessage((message: { command?: string; id?: string; refreshCommand?: string }) => {
+    switch (message.command) {
+      case 'refresh':
+        void refreshProblems(output, 'dashboard', true);
+        break;
+      case 'hardRefresh':
+        void hardRefreshProblems(output);
+        break;
+      case 'report':
+        void showDiagnosticsReport(output);
+        break;
+      case 'setup':
+        void vscode.commands.executeCommand('problemsCleaner.setup');
+        break;
+      case 'addExtension':
+        void addExtensionByPicker(output);
+        break;
+      case 'manageExtensions':
+        void vscode.commands.executeCommand('workbench.view.extensions');
+        break;
+      case 'toggleExtension':
+        if (message.id) {
+          void toggleManagedExtension(message.id);
+        }
+        break;
+      case 'removeExtension':
+        if (message.id) {
+          void removeManagedExtension(message.id);
+        }
+        break;
+      case 'addCommand':
+        if (message.id) {
+          void addCommandToManagedExtension(message.id);
+        }
+        break;
+      case 'refreshExtension':
+        if (message.id) {
+          void refreshManagedProviderById(message.id, output);
+        }
+        break;
+      case 'restartExtension':
+        if (message.id) {
+          void hardRefreshManagedProviderById(message.id, output);
+        }
+        break;
+      case 'configureExtension':
+        if (message.id) {
+          void configureExtensionById(message.id, output);
+        }
+        break;
+      case 'removeCommand':
+        if (message.id && message.refreshCommand) {
+          void removeManagedCommand(message.id, message.refreshCommand);
+        }
+        break;
+    }
+  });
 }
 
 async function toDashboardModel(summary: DiagnosticsSummary): Promise<unknown> {
@@ -1245,6 +1574,7 @@ function scheduleStatusBarUpdate(): void {
     void summarizeDiagnostics().then((summary) => {
       updateStatusBar(summary);
       dashboard?.update(summary);
+      panelDashboard?.update(summary);
     });
   }, 300);
 }
@@ -1276,8 +1606,6 @@ function createStatusBarTooltip(summary?: DiagnosticsSummary): vscode.MarkdownSt
     '',
     '[$(refresh) Refresh Problems](command:problemsCleaner.refreshProblems)',
     '[$(list-unordered) Show Report](command:problemsCleaner.showDiagnosticsReport)',
-    '[$(extensions) Manage Extensions](command:problemsCleaner.manageExtensions)',
-    '[$(gear) Setup Providers](command:problemsCleaner.setup)',
     '[$(debug-restart) Hard Refresh](command:problemsCleaner.hardRefreshProblems)'
   ];
 
@@ -1286,36 +1614,10 @@ function createStatusBarTooltip(summary?: DiagnosticsSummary): vscode.MarkdownSt
     enabledCommands: [
       'problemsCleaner.refreshProblems',
       'problemsCleaner.showDiagnosticsReport',
-      'problemsCleaner.manageExtensions',
-      'problemsCleaner.setup',
       'problemsCleaner.hardRefreshProblems'
     ]
   };
   return tooltip;
-}
-
-function setupWorkspaceWatchers(context: vscode.ExtensionContext, output: vscode.LogOutputChannel): void {
-  const watcher = vscode.workspace.createFileSystemWatcher('**/*');
-
-  const schedule = (reason: string): void => {
-    const config = vscode.workspace.getConfiguration('problemsCleaner');
-    if (!config.get<boolean>('autoRefreshOnFileDelete', true)) {
-      return;
-    }
-
-    if (refreshTimer) {
-      clearTimeout(refreshTimer);
-    }
-
-    const debounce = config.get<number>('autoRefreshDebounceMs', 1500);
-    refreshTimer = setTimeout(() => {
-      void refreshProblems(output, reason);
-    }, debounce);
-  };
-
-  watcher.onDidDelete(() => schedule('file-delete'), null, context.subscriptions);
-  watcher.onDidCreate(() => schedule('file-create-or-rename'), null, context.subscriptions);
-  context.subscriptions.push(watcher);
 }
 
 async function safeExecute(command: string, output: vscode.LogOutputChannel): Promise<boolean> {
