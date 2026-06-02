@@ -1036,7 +1036,7 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [this.extensionUri]
     };
-    view.webview.html = renderDashboardHtml(view.webview);
+    view.webview.html = renderDashboardHtml(view.webview, this.extensionUri);
 
     registerDashboardMessageHandler(view.webview, this.output);
 
@@ -1061,21 +1061,47 @@ class ProblemsCleanerDashboard implements vscode.WebviewViewProvider {
 
 }
 
-function renderDashboardHtml(webview: vscode.Webview): string {
+function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = getNonce();
+  const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'icon.png'));
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
     body {
-      padding: 14px;
+      background: var(--vscode-sideBar-background);
       color: var(--vscode-foreground);
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
+      margin: 0;
+      padding: 14px;
+    }
+    .header {
+      align-items: center;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      display: flex;
+      gap: 10px;
+      margin: -2px 0 14px;
+      padding-bottom: 12px;
+    }
+    .header img {
+      flex: 0 0 auto;
+      height: 30px;
+      width: 30px;
+    }
+    .title {
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .subtitle {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      margin-top: 2px;
     }
     .actions {
       display: grid;
@@ -1091,9 +1117,15 @@ function renderDashboardHtml(webview: vscode.Webview): string {
       display: flex;
       gap: 7px;
       justify-content: center;
+      line-height: 1.2;
       min-height: 30px;
       padding: 5px 10px;
+      text-align: center;
       width: 100%;
+    }
+    button:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
     }
     button.secondary {
       background: var(--vscode-button-secondaryBackground);
@@ -1112,7 +1144,9 @@ function renderDashboardHtml(webview: vscode.Webview): string {
       margin-bottom: 16px;
     }
     .stat {
+      background: var(--vscode-editor-background);
       border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
       padding: 10px;
     }
     .value {
@@ -1142,7 +1176,9 @@ function renderDashboardHtml(webview: vscode.Webview): string {
       padding: 7px 0;
     }
     .provider {
+      background: var(--vscode-editor-background);
       border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
       margin-bottom: 8px;
       padding: 10px;
     }
@@ -1168,12 +1204,13 @@ function renderDashboardHtml(webview: vscode.Webview): string {
       width: auto;
     }
     .button-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
       gap: 6px;
       margin-top: 8px;
     }
     .button-row button {
-      flex: 1;
+      width: 100%;
     }
     .muted {
       color: var(--vscode-descriptionForeground);
@@ -1184,6 +1221,14 @@ function renderDashboardHtml(webview: vscode.Webview): string {
   </style>
 </head>
 <body>
+  <div class="header">
+    <img src="${iconUri}" alt="">
+    <div>
+      <div class="title">Problems Cleaner</div>
+      <div class="subtitle">Manual diagnostics refresh and provider management</div>
+    </div>
+  </div>
+
   <div class="actions">
     <button id="refresh">Refresh Problems</button>
     <button id="report" class="secondary">Show Diagnostics Report</button>
@@ -1403,7 +1448,7 @@ class ProblemsCleanerPanelDashboard {
         retainContextWhenHidden: true
       }
     );
-    this.panel.webview.html = renderDashboardHtml(this.panel.webview);
+    this.panel.webview.html = renderDashboardHtml(this.panel.webview, this.extensionUri);
     registerDashboardMessageHandler(this.panel.webview, this.output);
     this.panel.onDidDispose(() => {
       this.panel = undefined;

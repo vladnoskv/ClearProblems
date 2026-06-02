@@ -3,8 +3,9 @@
   "displayName": "Problems Cleaner",
   "description": "Refresh stale VS Code Problems diagnostics, restart stuck diagnostic providers, and hide obsolete entries caused by stale lint/task extensions.",
   "version": "0.1.0",
-  "publisher": "predictduel",
+  "publisher": "VladNoskov",
   "license": "MIT",
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -40,49 +41,73 @@
         "command": "problemsCleaner.refreshProblems",
         "title": "Problems Cleaner: Refresh Problems",
         "category": "Problems Cleaner",
-        "icon": "$(refresh)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.hardRefreshProblems",
         "title": "Problems Cleaner: Hard Refresh Problems (Restart Extension Host)",
         "category": "Problems Cleaner",
-        "icon": "$(debug-restart)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.showDiagnosticsReport",
         "title": "Problems Cleaner: Show Diagnostics Report",
         "category": "Problems Cleaner",
-        "icon": "$(list-unordered)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.setup",
         "title": "Problems Cleaner: Setup Diagnostic Providers",
         "category": "Problems Cleaner",
-        "icon": "$(gear)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.manageExtensions",
         "title": "Problems Cleaner: Open Dashboard",
         "category": "Problems Cleaner",
-        "icon": "$(extensions)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.addExtensionFromContext",
         "title": "Problems Cleaner: Add to Problems Refresh",
         "category": "Problems Cleaner",
-        "icon": "$(add)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.refreshProviderFromProblem",
         "title": "Problems Cleaner: Refresh Provider for Problem",
         "category": "Problems Cleaner",
-        "icon": "$(refresh)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       },
       {
         "command": "problemsCleaner.hardRefreshProviderFromProblem",
         "title": "Problems Cleaner: Restart Provider for Problem",
         "category": "Problems Cleaner",
-        "icon": "$(debug-restart)"
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       }
     ],
     "viewsContainers": {

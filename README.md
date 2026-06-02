@@ -16,6 +16,7 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - let you right-click an installed extension and add its refresh/restart commands to Problems Cleaner;
 - manage refreshed extensions and commands from a visual dashboard;
 - refresh one configured provider from the dashboard, command palette, or Problems row context action when VS Code exposes row context;
+- include theme-aware PNG command/menu icons and a package PNG icon;
 - provide a one-click hard refresh via **Restart Extension Host** or **Reload Window**;
 - add Problems toolbar buttons and a status-bar button for quick access.
 
@@ -63,6 +64,13 @@ Refreshes only run when the user requests them. There is no file watcher auto-re
 ```
 
 Provider selections are saved by the extension and managed from the dashboard, not by editing `settings.json`.
+
+## Icons
+
+- `resources/icon.png` is the extension/package icon.
+- `resources/icons/problems-cleaner-light.png` is used for command/menu icons in light themes.
+- `resources/icons/problems-cleaner-dark.png` is used for command/menu icons in dark themes.
+- `resources/problems-cleaner.svg` is the Activity Bar icon and uses `currentColor` so VS Code can theme it.
 
 ## Development
 

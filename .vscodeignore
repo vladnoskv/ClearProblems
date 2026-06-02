@@ -4,6 +4,7 @@ src/**
 **/*.map
 tsconfig.json
 node_modules/**
+scripts/**
 .git/**
 .gitignore
 package-lock.json
