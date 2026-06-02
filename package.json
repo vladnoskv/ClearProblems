@@ -6,6 +6,18 @@
   "publisher": "VladNoskov",
   "license": "MIT",
   "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vladnoskv/ClearProblems.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vladnoskv/ClearProblems/issues"
+  },
+  "homepage": "https://github.com/vladnoskv/ClearProblems#readme",
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -237,8 +249,8 @@
         },
         "problemsCleaner.openProblemsAfterRefresh": {
           "type": "boolean",
-          "default": true,
-          "description": "Open/focus the Problems panel after refreshing."
+          "default": false,
+          "description": "Open/focus the Problems panel after manual refresh. Disabled by default so refresh does not steal focus."
         }
       }
     }
@@ -250,7 +262,8 @@
     "watch": "tsc -watch -p ./",
     "vscode:prepublish": "npm run compile",
     "package": "npm run vsix",
-    "vsix": "npm run clean && npm run compile && vsce package --no-dependencies --allow-missing-repository --out dist/vscode-problems-cleaner.vsix"
+    "vsix": "npm run clean && npm run compile && vsce package --no-dependencies --out dist/vscode-problems-cleaner.vsix",
+    "publish:dry-run": "npm run vsix && vsce ls --tree --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

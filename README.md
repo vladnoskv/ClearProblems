@@ -2,6 +2,8 @@
 
 A VS Code extension that helps clear stale entries in the **Problems** pane by refreshing diagnostic providers and optionally restarting the Extension Host.
 
+Problems Cleaner is manual by design. It does not watch the whole workspace or auto-refresh in the background, so it avoids CPU churn and does not steal focus from your current editor or terminal.
+
 ## Why this exists
 
 VS Code diagnostics are owned by the extension or task that created them. A third-party extension cannot directly mutate another extension's `DiagnosticCollection`. This extension therefore uses the practical workaround users actually need:
@@ -19,6 +21,12 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - include theme-aware PNG command/menu icons and a package PNG icon;
 - provide a one-click hard refresh via **Restart Extension Host** or **Reload Window**;
 - add Problems toolbar buttons and a status-bar button for quick access.
+
+## Important limitations
+
+VS Code diagnostics are owned by the extension or task that published them. Problems Cleaner cannot directly delete diagnostics from another extension's `DiagnosticCollection`. It can request refresh/restart commands exposed by those providers and can restart the Extension Host when a provider is stuck.
+
+VS Code also does not expose a public API to restart only one arbitrary extension. Provider-specific **Restart** first runs that provider's configured refresh/restart commands, then offers Extension Host restart as the hard-refresh fallback.
 
 ## Commands
 
@@ -42,9 +50,10 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - Use each provider's **Restart** button when its diagnostics remain stale. VS Code's public API cannot restart only one extension; this action first refreshes that provider, then offers Extension Host restart as the available hard refresh.
 - Right-click an extension in VS Code's Extensions view and choose **Problems Cleaner: Add to Problems Refresh**.
 - Right-click a Problems row and choose **Problems Cleaner: Refresh Provider for Problem** if VS Code exposes the Problems row context menu in your build.
-- Hover the status-bar item for quick command links. VS Code's public extension API supports Markdown tooltips there, not the same private rich hover surface used by some built-in/Copilot UI.
+- Hover the status-bar item for quick refresh/report/hard-refresh links. Provider setup is intentionally handled in the dashboard, not from hover UI.
 
 Refreshes only run when the user requests them. There is no file watcher auto-refresh path.
+Manual refresh does not open or focus the Problems panel unless `problemsCleaner.openProblemsAfterRefresh` is explicitly enabled.
 
 ## Settings
 
@@ -59,7 +68,8 @@ Refreshes only run when the user requests them. There is no file watcher auto-re
     "python.analysis.restartLanguageServer"
   ],
   "problemsCleaner.hardRefreshMode": "restartExtensionHost",
-  "problemsCleaner.showStatusBarButton": true
+  "problemsCleaner.showStatusBarButton": true,
+  "problemsCleaner.openProblemsAfterRefresh": false
 }
 ```
 
@@ -85,3 +95,17 @@ Then install `dist/vscode-problems-cleaner.vsix` in VS Code:
 ```bash
 code --install-extension dist/vscode-problems-cleaner.vsix
 ```
+
+## Publishing
+
+The package includes Marketplace metadata in `package.json`: publisher, repository, bugs, homepage, icon, gallery banner, categories, and keywords.
+
+Before publishing:
+
+```bash
+npm run compile
+npm run vsix
+npx vsce publish
+```
+
+Publishing requires a Marketplace publisher account and a `vsce` Personal Access Token.
