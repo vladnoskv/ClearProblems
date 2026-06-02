@@ -2,7 +2,7 @@
   "name": "vscode-problems-cleaner",
   "displayName": "Problems Cleaner",
   "description": "Refresh stale VS Code Problems diagnostics, restart stuck diagnostic providers, and hide obsolete entries caused by stale lint/task extensions.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "VladNoskov",
   "license": "MIT",
   "icon": "resources/icon.png",

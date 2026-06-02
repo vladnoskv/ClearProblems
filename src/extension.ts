@@ -105,6 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   setupStatusBar(context);
+  setupDiagnosticsStatusUpdates(context);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -180,7 +181,7 @@ async function refreshProblemsCore(
   panelDashboard?.update(after);
   output.info(`Soft refresh finished. Before=${before.total}. After=${after.total}. Missing-file diagnostics=${after.missingFiles}. Commands executed=${commands.executed.length}. Skipped=${commands.skipped.length}. Failed=${commands.failed.length}.`);
 
-  if (config.get<boolean>('openProblemsAfterRefresh', true)) {
+  if (config.get<boolean>('openProblemsAfterRefresh', false)) {
     await safeExecute('workbench.actions.view.problems', output);
     throwIfCancelled(token, 'Refresh Problems');
   }

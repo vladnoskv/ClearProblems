@@ -12,4 +12,5 @@ package-lock.json
 # IgnoreKit
 # Added from VS Code Explorer
 /vscode-problems-cleaner-0.1.0.vsix
+/dev.md
 # End IgnoreKit

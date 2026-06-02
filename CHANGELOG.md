@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.1.2
+
+- Fixed diagnostics-change updates so the status bar and dashboard refresh when VS Code diagnostics change.
+- Kept the manual refresh fallback aligned with the documented `openProblemsAfterRefresh: false` default.
+
 ## 0.1.1
 
 - Added cancellable refresh operations with a **Cancel Operation** command and status-bar hover cancel link while work is running.

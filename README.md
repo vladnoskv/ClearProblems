@@ -3,6 +3,7 @@
 A VS Code extension that helps clear stale entries in the **Problems** pane by refreshing diagnostic providers and optionally restarting the Extension Host.
 
 Problems Cleaner is manual by design. It does not watch the whole workspace or auto-refresh in the background, so it avoids CPU churn and does not steal focus from your current editor or terminal.
+The status bar and dashboard still update when VS Code publishes new diagnostics, so counts stay current without running refresh commands automatically.
 
 ## Why this exists
 
@@ -77,40 +78,3 @@ Manual refresh does not open or focus the Problems panel unless `problemsCleaner
   "problemsCleaner.openProblemsAfterRefresh": false
 }
 ```
-
-Provider selections are saved by the extension and managed from the dashboard, not by editing `settings.json`.
-
-## Icons
-
-- `resources/icon.png` is the extension/package icon.
-- `resources/icons/problems-cleaner-light.png` is used for command/menu icons in light themes.
-- `resources/icons/problems-cleaner-dark.png` is used for command/menu icons in dark themes.
-- `resources/problems-cleaner.svg` is the Activity Bar icon and uses `currentColor` so VS Code can theme it.
-
-## Development
-
-```bash
-npm install
-npm run compile
-npm run vsix
-```
-
-Then install `dist/vscode-problems-cleaner.vsix` in VS Code:
-
-```bash
-code --install-extension dist/vscode-problems-cleaner.vsix
-```
-
-## Publishing
-
-The package includes Marketplace metadata in `package.json`: publisher, repository, bugs, homepage, icon, gallery banner, categories, and keywords.
-
-Before publishing:
-
-```bash
-npm run compile
-npm run vsix
-npx vsce publish
-```
-
-Publishing requires a Marketplace publisher account and a `vsce` Personal Access Token.
