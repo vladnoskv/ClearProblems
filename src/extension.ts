@@ -652,11 +652,16 @@ async function waitForTaskOutput(
   token: vscode.CancellationToken | undefined,
   label: string
 ): Promise<void> {
+  const config = vscode.workspace.getConfiguration('problemsCleaner');
+
   if (task.isBackground) {
-    output.debug(`Task "${task.name}" is a background task; waiting for initial compilation.`);
-    await sleep(8000, token, label);
+    const waitMs = config.get<number>('backgroundTaskWaitMs', 8000);
+    output.debug(`Task "${task.name}" is a background task; waiting ${waitMs}ms for initial compilation.`);
+    await sleep(waitMs, token, label);
     return;
   }
+
+  const timeoutMs = config.get<number>('taskExecutionTimeoutMs', 120000);
 
   await new Promise<void>((resolve, reject) => {
     const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
@@ -678,8 +683,8 @@ async function waitForTaskOutput(
     setTimeout(() => {
       subscription.dispose();
       cancelSub?.dispose();
-      reject(new Error(`Task "${task.name}" timed out after 120s.`));
-    }, 120000);
+      reject(new Error(`Task "${task.name}" timed out after ${timeoutMs / 1000}s.`));
+    }, timeoutMs);
   });
 }
 
@@ -1455,6 +1460,12 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
       gap: 8px;
       margin-bottom: 16px;
     }
+    .action-divider {
+      background: var(--vscode-panel-border);
+      border: none;
+      height: 1px;
+      margin: 4px 0;
+    }
     button {
       align-items: center;
       background: var(--vscode-button-background);
@@ -1583,6 +1594,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     <button id="addExtension" class="secondary">Add Installed Extension</button>
     <button id="hardRefresh" class="secondary">Hard Refresh</button>
     <button id="clearProblems" class="secondary">Clear Problems</button>
+    <hr class="action-divider">
     <button id="settings" class="secondary">Settings</button>
   </div>
 
@@ -1905,7 +1917,9 @@ class ProblemsCleanerSettings {
           showStatusBarButton: config.get<boolean>('showStatusBarButton', true),
           saveAllBeforeRefresh: config.get<boolean>('saveAllBeforeRefresh', false),
           openProblemsAfterRefresh: config.get<boolean>('openProblemsAfterRefresh', false),
-          showSetupOnFirstInstall: config.get<boolean>('showSetupOnFirstInstall', true)
+          showSetupOnFirstInstall: config.get<boolean>('showSetupOnFirstInstall', true),
+          backgroundTaskWaitMs: config.get<number>('backgroundTaskWaitMs', 8000),
+          taskExecutionTimeoutMs: config.get<number>('taskExecutionTimeoutMs', 120000)
         };
         await this.panel?.webview.postMessage({ type: 'settingsModel', data });
         break;
@@ -1928,6 +1942,13 @@ class ProblemsCleanerSettings {
         if (typeof message.key === 'string' && Array.isArray(message.value)) {
           await config.update(message.key, message.value, vscode.ConfigurationTarget.Workspace);
           this.output.info(`Settings: ${message.key} updated with ${message.value.length} item(s).`);
+        }
+        break;
+      }
+      case 'updateInteger': {
+        if (typeof message.key === 'string' && typeof message.value === 'number') {
+          await config.update(message.key, message.value, vscode.ConfigurationTarget.Workspace);
+          this.output.info(`Settings: ${message.key} = ${message.value}`);
         }
         break;
       }
@@ -2057,6 +2078,20 @@ function renderSettingsHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     </div>
   </div>
 
+  <div class="section">
+    <h2>Timing</h2>
+    <div class="field">
+      <label for="backgroundTaskWaitMs">Background task wait (ms)</label>
+      <input type="number" id="backgroundTaskWaitMs" min="1000" max="60000" step="500">
+      <p class="desc">How long to wait for a background/watch task to publish diagnostics after restart. Increase if your build system takes longer to produce initial output.</p>
+    </div>
+    <div class="field">
+      <label for="taskExecutionTimeoutMs">Task execution timeout (ms)</label>
+      <input type="number" id="taskExecutionTimeoutMs" min="5000" max="600000" step="1000">
+      <p class="desc">Maximum time to wait for a non-background task to finish during Clear Problems or Refresh Problems.</p>
+    </div>
+  </div>
+
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
@@ -2070,6 +2105,8 @@ function renderSettingsHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
       document.getElementById('openProblemsAfterRefresh').checked = d.openProblemsAfterRefresh;
       document.getElementById('showSetupOnFirstInstall').checked = d.showSetupOnFirstInstall;
       document.getElementById('hardRefreshMode').value = d.hardRefreshMode;
+      document.getElementById('backgroundTaskWaitMs').value = d.backgroundTaskWaitMs;
+      document.getElementById('taskExecutionTimeoutMs').value = d.taskExecutionTimeoutMs;
 
       renderArrayItems('providerCommands', d.providerRefreshCommands, 'providerCommands');
       renderArrayItems('clearedTasksList', d.clearedTasks, 'clearedTasks');
@@ -2144,6 +2181,12 @@ function renderSettingsHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     });
     document.getElementById('hardRefreshMode').addEventListener('change', function() {
       vscode.postMessage({ command: 'updateString', key: 'hardRefreshMode', value: this.value });
+    });
+    document.getElementById('backgroundTaskWaitMs').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateInteger', key: 'backgroundTaskWaitMs', value: parseInt(this.value, 10) });
+    });
+    document.getElementById('taskExecutionTimeoutMs').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateInteger', key: 'taskExecutionTimeoutMs', value: parseInt(this.value, 10) });
     });
 
     vscode.postMessage({ command: 'loadSettings' });

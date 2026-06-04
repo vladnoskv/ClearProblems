@@ -247,15 +247,23 @@
     "configuration": {
       "title": "Problems Cleaner",
       "properties": {
-        "problemsCleaner.showStatusBarButton": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a status bar button for refreshing Problems diagnostics."
-        },
         "problemsCleaner.saveAllBeforeRefresh": {
           "type": "boolean",
           "default": false,
-          "description": "Save all open files before running refresh commands."
+          "order": 1,
+          "markdownDescription": "Save all open files before running refresh commands."
+        },
+        "problemsCleaner.openProblemsAfterRefresh": {
+          "type": "boolean",
+          "default": false,
+          "order": 2,
+          "markdownDescription": "Open and focus the Problems panel after a manual refresh. Disabled by default so refresh does not steal focus."
+        },
+        "problemsCleaner.showSetupOnFirstInstall": {
+          "type": "boolean",
+          "default": true,
+          "order": 3,
+          "markdownDescription": "Prompt to scan installed extensions and configure diagnostic providers the first time Problems Cleaner activates."
         },
         "problemsCleaner.providerRefreshCommands": {
           "type": "array",
@@ -270,31 +278,14 @@
           "items": {
             "type": "string"
           },
-          "description": "Command IDs to run during soft refresh. Missing commands are ignored. Add language/linter restart commands here."
-        },
-        "problemsCleaner.showSetupOnFirstInstall": {
-          "type": "boolean",
-          "default": true,
-          "description": "Prompt to configure diagnostic providers the first time Problems Cleaner activates."
-        },
-        "problemsCleaner.hardRefreshMode": {
-          "type": "string",
-          "enum": [
-            "restartExtensionHost",
-            "reloadWindow"
-          ],
-          "default": "restartExtensionHost",
-          "description": "Hard refresh strategy. Restart Extension Host is less disruptive than Reload Window when supported."
-        },
-        "problemsCleaner.openProblemsAfterRefresh": {
-          "type": "boolean",
-          "default": false,
-          "description": "Open/focus the Problems panel after manual refresh. Disabled by default so refresh does not steal focus."
+          "order": 10,
+          "markdownDescription": "VS Code command IDs executed during **Refresh Problems** to restart language servers and linters. Missing or unavailable commands are silently skipped. Add your language/linter restart commands here."
         },
         "problemsCleaner.refreshTasks": {
           "type": "boolean",
           "default": false,
-          "description": "Re-execute workspace tasks whose problemMatchers generated current diagnostics. When a task runs again, VS Code clears old task-owned diagnostics and republishes fresh ones — fixing duplicate/stale problems caused by line shifts after edits. Leave disabled if you prefer not to re-run tasks automatically."
+          "order": 20,
+          "markdownDescription": "Re-execute workspace tasks whose `problemMatchers` generated current diagnostics during **Refresh Problems**. When a task runs again, VS Code clears old task-owned diagnostics and republishes fresh ones — fixing duplicate/stale problems caused by line shifts after edits. Leave disabled if you don't want tasks re-run automatically during refresh."
         },
         "problemsCleaner.clearedTasks": {
           "type": "array",
@@ -302,7 +293,44 @@
           "items": {
             "type": "string"
           },
-          "description": "Task names allowed to be killed and restarted by the Clear Problems action. When Clear Problems runs, only tasks whose name appears in this list will be terminated and re-executed. Add the exact task names from your tasks.json that you want Clear Problems to manage."
+          "order": 21,
+          "markdownDescription": "Task names (exact labels from `tasks.json`) that **Clear Problems** is allowed to terminate and restart. When Clear Problems runs, only tasks whose name appears in this list will be killed and re-executed. Leave empty to prevent Clear Problems from restarting any tasks – it will still show matching tasks in the dashboard.\n\nExample: `[\"tsc: watch - tsconfig.json\", \"eslint: whole folder\"]`"
+        },
+        "problemsCleaner.hardRefreshMode": {
+          "type": "string",
+          "enum": [
+            "restartExtensionHost",
+            "reloadWindow"
+          ],
+          "markdownEnumDescriptions": [
+            "Restart the VS Code Extension Host. Less disruptive; clears most stuck diagnostics without reloading the window.",
+            "Reload the entire VS Code window. Fallback when the Extension Host restart is not enough."
+          ],
+          "default": "restartExtensionHost",
+          "order": 30,
+          "markdownDescription": "Hard refresh strategy for **Hard Refresh Problems**. Restart Extension Host is less disruptive than Reload Window when supported."
+        },
+        "problemsCleaner.showStatusBarButton": {
+          "type": "boolean",
+          "default": true,
+          "order": 40,
+          "markdownDescription": "Show the Problems Cleaner button in the VS Code status bar for quick access to refresh, report, and settings."
+        },
+        "problemsCleaner.backgroundTaskWaitMs": {
+          "type": "integer",
+          "default": 8000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "order": 50,
+          "markdownDescription": "How long (in milliseconds) to wait for a background/watch task to publish diagnostics after being restarted. Increase if your build system takes longer to produce initial output."
+        },
+        "problemsCleaner.taskExecutionTimeoutMs": {
+          "type": "integer",
+          "default": 120000,
+          "minimum": 5000,
+          "maximum": 600000,
+          "order": 51,
+          "markdownDescription": "Maximum time (in milliseconds) to wait for a non-background task to finish executing during Clear Problems or Refresh Problems. If the task doesn't complete within this time, it is treated as timed out and execution continues."
         }
       }
     }
