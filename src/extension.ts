@@ -40,6 +40,13 @@ interface ExtensionCandidate {
   autoScore: number;
 }
 
+interface DiagnosticTask {
+  task: vscode.Task;
+  source: string;
+  diagnosticCount: number;
+  matchedBy: 'name' | 'source' | 'problemMatcher';
+}
+
 const EXTENSION_NAME = 'Problems Cleaner';
 const SETUP_STATE_KEY = 'problemsCleaner.setupPromptShown';
 const MANAGED_EXTENSIONS_STATE_KEY = 'problemsCleaner.managedExtensions';
@@ -101,7 +108,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('problemsCleaner.manageExtensions', () => openManager(context.extensionUri, output)),
     vscode.commands.registerCommand('problemsCleaner.addExtensionFromContext', (item) => addExtensionFromContext(item, output)),
     vscode.commands.registerCommand('problemsCleaner.refreshProviderFromProblem', (item) => refreshProviderFromProblem(item, output)),
-    vscode.commands.registerCommand('problemsCleaner.hardRefreshProviderFromProblem', (item) => hardRefreshProviderFromProblem(item, output))
+    vscode.commands.registerCommand('problemsCleaner.hardRefreshProviderFromProblem', (item) => hardRefreshProviderFromProblem(item, output)),
+    vscode.commands.registerCommand('problemsCleaner.clearProblems', () => clearProblems(output))
   );
 
   setupStatusBar(context);
@@ -166,6 +174,24 @@ async function refreshProblemsCore(
   progress.report({ message: 'Restarting diagnostic providers...' });
   const commands = await runConfiguredProviderCommands(output, token);
   throwIfCancelled(token, 'Refresh Problems');
+
+  let taskResult = { executed: [] as string[], skipped: [] as string[], failed: [] as string[] };
+  if (config.get<boolean>('refreshTasks', false)) {
+    progress.report({ message: 'Finding matching tasks...' });
+    const diagnosticTasks = await fetchDiagnosticTasks();
+    throwIfCancelled(token, 'Refresh Problems');
+
+    if (diagnosticTasks.length > 0) {
+      output.info(`Found ${diagnosticTasks.length} task(s) matching current diagnostics.`);
+      progress.report({ message: `Re-executing ${diagnosticTasks.length} task(s)...` });
+      taskResult = await executeDiagnosticTasks(diagnosticTasks, output, token);
+      throwIfCancelled(token, 'Refresh Problems');
+
+      progress.report({ message: 'Waiting for task diagnostics to republish...' });
+      await sleep(800, token, 'Refresh Problems');
+    }
+  }
+
   progress.report({ message: 'Refreshing visible documents...' });
   await pokeOpenDocuments(output, token);
   throwIfCancelled(token, 'Refresh Problems');
@@ -179,7 +205,7 @@ async function refreshProblemsCore(
   updateStatusBar(after);
   dashboard?.update(after);
   panelDashboard?.update(after);
-  output.info(`Soft refresh finished. Before=${before.total}. After=${after.total}. Missing-file diagnostics=${after.missingFiles}. Commands executed=${commands.executed.length}. Skipped=${commands.skipped.length}. Failed=${commands.failed.length}.`);
+  output.info(`Soft refresh finished. Before=${before.total}. After=${after.total}. Missing-file diagnostics=${after.missingFiles}. Commands executed=${commands.executed.length}. Skipped=${commands.skipped.length}. Failed=${commands.failed.length}. Tasks executed=${taskResult.executed.length}. Task failed=${taskResult.failed.length}.`);
 
   if (config.get<boolean>('openProblemsAfterRefresh', false)) {
     await safeExecute('workbench.actions.view.problems', output);
@@ -226,6 +252,185 @@ async function hardRefreshProblems(output: vscode.LogOutputChannel): Promise<voi
     output.error(`Restart Extension Host failed; falling back to Reload Window. ${String(error)}`);
     await vscode.commands.executeCommand('workbench.action.reloadWindow');
   }
+}
+
+function getAllowedTaskNames(): string[] {
+  const config = vscode.workspace.getConfiguration('problemsCleaner');
+  return config.get<string[]>('clearedTasks', []).map((name) => name.trim()).filter(Boolean);
+}
+
+function isTaskAllowed(task: vscode.Task): boolean {
+  const allowed = getAllowedTaskNames();
+  if (allowed.length === 0) {
+    return false;
+  }
+  return allowed.some((name) => name.toLowerCase() === task.name.toLowerCase());
+}
+
+async function clearProblems(output: vscode.LogOutputChannel): Promise<void> {
+  const allowedNames = getAllowedTaskNames();
+  if (allowedNames.length === 0) {
+    void vscode.window.showWarningMessage(
+      'No tasks are configured in problemsCleaner.clearedTasks. Add task names to enable Clear Problems.',
+      'Open Settings'
+    ).then((action) => {
+      if (action === 'Open Settings') {
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'problemsCleaner.clearedTasks');
+      }
+    });
+    return;
+  }
+
+  await withCancellableOperation(
+    'Clear Problems',
+    output,
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Problems Cleaner: Clear Problems'
+    },
+    async (progress, token) => {
+      throwIfCancelled(token, 'Clear Problems');
+      progress.report({ message: 'Reading diagnostics...' });
+      const before = await summarizeDiagnostics();
+      output.info(`Clear Problems started. Current diagnostics=${before.total}. Missing-file=${before.missingFiles}.`);
+
+      throwIfCancelled(token, 'Clear Problems');
+      progress.report({ message: 'Finding diagnostic tasks...' });
+      const diagnosticTasks = await fetchDiagnosticTasks();
+      throwIfCancelled(token, 'Clear Problems');
+
+      if (diagnosticTasks.length === 0) {
+        output.info('Clear Problems: no tasks matched current diagnostics.');
+        vscode.window.setStatusBarMessage(`$(pass) No task-owned diagnostics to clear.`, 4000);
+        return;
+      }
+
+      const allowedTasks = diagnosticTasks.filter((entry) => isTaskAllowed(entry.task));
+      const blockedTasks = diagnosticTasks.filter((entry) => !isTaskAllowed(entry.task));
+      const blockedNames = [...new Set(blockedTasks.map((t) => t.task.name))];
+
+      if (blockedNames.length > 0) {
+        output.info(`Clear Problems: skipping ${blockedNames.length} task(s) not in clearedTasks list: ${blockedNames.join(', ')}.`);
+      }
+
+      throwIfCancelled(token, 'Clear Problems');
+
+      let terminated = 0;
+      let restartFailed = 0;
+      let restarted = 0;
+
+      const runningExecutions = vscode.tasks.taskExecutions;
+      const runningTaskNames = new Set(
+        runningExecutions.map((exec) => exec.task.name.toLowerCase())
+      );
+
+      for (const entry of diagnosticTasks) {
+        throwIfCancelled(token, 'Clear Problems');
+
+        if (runningTaskNames.has(entry.task.name.toLowerCase())) {
+          const running = runningExecutions.filter(
+            (exec) => exec.task.name.toLowerCase() === entry.task.name.toLowerCase()
+          );
+
+          for (const exec of running) {
+            try {
+              output.info(`Clear Problems: terminating running task "${entry.task.name}".`);
+              exec.terminate();
+              terminated += 1;
+            } catch (error) {
+              output.debug(`Failed to terminate task "${entry.task.name}": ${String(error)}`);
+            }
+          }
+        }
+      }
+
+      if (terminated > 0) {
+        progress.report({ message: `Terminated ${terminated} task(s), waiting for cleanup...` });
+        await sleep(1000, token, 'Clear Problems');
+        throwIfCancelled(token, 'Clear Problems');
+      }
+
+      if (allowedTasks.length === 0) {
+        output.info(`Clear Problems: no allowed tasks to restart. ${terminated} task(s) terminated.`);
+        const after = await summarizeDiagnostics();
+        updateStatusBar(after);
+        dashboard?.update(after);
+        panelDashboard?.update(after);
+        vscode.window.setStatusBarMessage(
+          `$(clear-all) ${terminated} task(s) terminated. ${blockedNames.length} task(s) not in clearedTasks list.`,
+          6000
+        );
+        return;
+      }
+
+      progress.report({ message: `Restarting ${allowedTasks.length} allowed task(s)...` });
+      for (const entry of allowedTasks) {
+        throwIfCancelled(token, 'Clear Problems');
+
+        try {
+          output.info(`Clear Problems: restarting allowed task "${entry.task.name}" (${entry.diagnosticCount} diagnostics from "${entry.source}").`);
+          const execution = await vscode.tasks.executeTask(entry.task);
+
+          await new Promise<void>((resolve, reject) => {
+            const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
+              if (e.execution === execution) {
+                subscription.dispose();
+                if (e.exitCode !== undefined && e.exitCode !== 0) {
+                  output.debug(`Task "${entry.task.name}" exited with code ${e.exitCode}.`);
+                }
+                resolve();
+              }
+            });
+
+            const cancelSub = token?.onCancellationRequested(() => {
+              subscription.dispose();
+              cancelSub?.dispose();
+              reject(new OperationCancelledError('Clear Problems'));
+            });
+
+            setTimeout(() => {
+              subscription.dispose();
+              cancelSub?.dispose();
+              output.debug(`Task "${entry.task.name}" did not complete within timeout.`);
+              resolve();
+            }, 120000);
+          });
+
+          restarted += 1;
+        } catch (error) {
+          if (isOperationCancelledError(error)) {
+            throw error;
+          }
+          output.debug(`Failed to restart task "${entry.task.name}": ${String(error)}`);
+          restartFailed += 1;
+        }
+      }
+
+      progress.report({ message: 'Waiting for diagnostics to republish...' });
+      await sleep(1000, token, 'Clear Problems');
+      throwIfCancelled(token, 'Clear Problems');
+
+      const after = await summarizeDiagnostics();
+      updateStatusBar(after);
+      dashboard?.update(after);
+      panelDashboard?.update(after);
+
+      output.info(`Clear Problems finished. Before=${before.total}. After=${after.total}. Tasks terminated=${terminated}. Restarted=${restarted}. Failed=${restartFailed}. Skipped=${blockedNames.length}.`);
+
+      let statusMsg = `$(clear-all) Clear Problems: ${restarted} task(s) restarted.`;
+      if (terminated > 0) {
+        statusMsg += ` ${terminated} terminated.`;
+      }
+      if (blockedNames.length > 0) {
+        statusMsg += ` ${blockedNames.length} skipped.`;
+      }
+      vscode.window.setStatusBarMessage(statusMsg, 6000);
+
+      void vscode.window.showInformationMessage(
+        `Clear Problems: ${terminated} task(s) terminated, ${restarted} restarted. Diagnostics ${before.total} → ${after.total}.`
+      );
+    }
+  );
 }
 
 async function showDiagnosticsReport(output: vscode.LogOutputChannel): Promise<void> {
@@ -375,6 +580,104 @@ function getConfiguredRefreshCommands(): string[] {
     .flatMap((extension) => extension.commands);
 
   return uniqueStrings([...legacyCommands, ...managedCommands]);
+}
+
+async function fetchDiagnosticTasks(): Promise<DiagnosticTask[]> {
+  const diagnostics = vscode.languages.getDiagnostics();
+  const diagnosticSources = new Map<string, number>();
+
+  for (const [, items] of diagnostics) {
+    for (const diag of items) {
+      const source = diag.source;
+      if (source) {
+        diagnosticSources.set(source, (diagnosticSources.get(source) || 0) + 1);
+      }
+    }
+  }
+
+  if (diagnosticSources.size === 0) {
+    return [];
+  }
+
+  const tasks = await vscode.tasks.fetchTasks();
+  const matched = new Map<string, DiagnosticTask>();
+
+  for (const task of tasks) {
+    const taskName = task.name.toLowerCase();
+    const taskSource = task.source.toLowerCase();
+    const matchers = (task.problemMatchers ?? []).map((m) => m.replace(/^\$/, '').toLowerCase());
+
+    for (const [diagSource, count] of diagnosticSources) {
+      const key = `${task.name}|${diagSource}`;
+      if (matched.has(key)) {
+        continue;
+      }
+
+      const lower = diagSource.toLowerCase();
+
+      if (taskName === lower || taskName.includes(lower) || lower.includes(taskName)) {
+        matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'name' });
+      } else if (taskSource && (taskSource === lower || taskSource.includes(lower) || lower.includes(taskSource))) {
+        matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'source' });
+      } else if (matchers.some((m) => m === lower || lower.includes(m) || m.includes(lower))) {
+        matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'problemMatcher' });
+      }
+    }
+  }
+
+  return [...matched.values()].sort((a, b) => b.diagnosticCount - a.diagnosticCount);
+}
+
+async function executeDiagnosticTasks(
+  tasks: DiagnosticTask[],
+  output: vscode.LogOutputChannel,
+  token?: vscode.CancellationToken
+): Promise<{ executed: string[]; skipped: string[]; failed: string[] }> {
+  const result = { executed: [] as string[], skipped: [] as string[], failed: [] as string[] };
+
+  for (const entry of tasks) {
+    throwIfCancelled(token, 'Task Refresh');
+
+    try {
+      output.info(`Re-executing task "${entry.task.name}" (matched by ${entry.matchedBy}) to refresh ${entry.diagnosticCount} diagnostic(s) from "${entry.source}".`);
+      const execution = await vscode.tasks.executeTask(entry.task);
+
+      await new Promise<void>((resolve, reject) => {
+        const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
+          if (e.execution === execution) {
+            subscription.dispose();
+            if (e.exitCode !== undefined && e.exitCode !== 0) {
+              output.debug(`Task "${entry.task.name}" exited with code ${e.exitCode}. Diagnostics may still be stale.`);
+            }
+            resolve();
+          }
+        });
+
+        const cancelSub = token?.onCancellationRequested(() => {
+          subscription.dispose();
+          cancelSub?.dispose();
+          reject(new OperationCancelledError('Task Refresh'));
+        });
+
+        setTimeout(() => {
+          subscription.dispose();
+          cancelSub?.dispose();
+          output.debug(`Task "${entry.task.name}" did not complete within timeout.`);
+          resolve();
+        }, 120000);
+      });
+
+      result.executed.push(entry.task.name);
+    } catch (error) {
+      if (isOperationCancelledError(error)) {
+        throw error;
+      }
+      output.debug(`Failed to execute task "${entry.task.name}": ${String(error)}`);
+      result.failed.push(entry.task.name);
+    }
+  }
+
+  return result;
 }
 
 async function pokeOpenDocuments(output: vscode.LogOutputChannel, token?: vscode.CancellationToken): Promise<void> {
@@ -1276,6 +1579,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     <button id="setup" class="secondary">Setup Providers</button>
     <button id="addExtension" class="secondary">Add Installed Extension</button>
     <button id="hardRefresh" class="secondary">Hard Refresh</button>
+    <button id="clearProblems" class="secondary">Clear Problems</button>
   </div>
 
   <div class="stats">
@@ -1297,6 +1601,9 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
   <h2>Missing File Diagnostics</h2>
   <ul id="missingFiles"><li class="muted">No missing file diagnostics.</li></ul>
 
+  <h2>Diagnostic Tasks</h2>
+  <div id="diagnosticTasks"><div id="tasksDisabledNote" class="muted">Enable refreshTasks in settings to detect and re-execute tasks that own current diagnostics.</div><div id="tasksNoMatch" class="muted" style="display:none">No task-owned diagnostics detected.</div><ul id="tasksList" style="display:none"></ul></div>
+
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     document.getElementById('refresh').addEventListener('click', () => vscode.postMessage({ command: 'refresh' }));
@@ -1304,6 +1611,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     document.getElementById('setup').addEventListener('click', () => vscode.postMessage({ command: 'setup' }));
     document.getElementById('addExtension').addEventListener('click', () => vscode.postMessage({ command: 'addExtension' }));
     document.getElementById('hardRefresh').addEventListener('click', () => vscode.postMessage({ command: 'hardRefresh' }));
+    document.getElementById('clearProblems').addEventListener('click', () => vscode.postMessage({ command: 'clearProblems' }));
 
     window.addEventListener('message', (event) => {
       if (event.data.type !== 'model') {
@@ -1320,6 +1628,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
       renderManagedExtensions(model.managedExtensions);
       renderSuggestedExtensions(model.suggestedExtensions);
       renderMissingFiles(summary.missingFileResources);
+      renderDiagnosticTasks(model.refreshTasksEnabled, model.diagnosticTasks);
     });
 
     function renderSources(sources) {
@@ -1439,6 +1748,38 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
       }
     }
 
+    function renderDiagnosticTasks(refreshTasksEnabled, diagnosticTasks) {
+      const note = document.getElementById('tasksDisabledNote');
+      const noMatch = document.getElementById('tasksNoMatch');
+      const list = document.getElementById('tasksList');
+      note.style.display = refreshTasksEnabled ? 'none' : '';
+      if (!refreshTasksEnabled) {
+        noMatch.style.display = 'none';
+        list.style.display = 'none';
+        return;
+      }
+      if (diagnosticTasks.length === 0) {
+        noMatch.style.display = '';
+        list.style.display = 'none';
+        return;
+      }
+      noMatch.style.display = 'none';
+      list.style.display = '';
+      list.replaceChildren();
+      for (const task of diagnosticTasks) {
+        const row = document.createElement('li');
+        const content = document.createElement('div');
+        const label = document.createElement('span');
+        const meta = document.createElement('span');
+        label.textContent = task.name + (task.allowed ? ' ✓' : ' ✗');
+        meta.className = 'muted';
+        meta.textContent = task.count + ' diagnostics (matched by ' + task.matchedBy + ')' + (task.allowed ? '' : ' — not in clearedTasks');
+        content.append(label, ' ', meta);
+        row.appendChild(content);
+        list.appendChild(row);
+      }
+    }
+
     function emptyRow(text) {
       const row = document.createElement('li');
       row.className = 'muted';
@@ -1521,6 +1862,9 @@ function registerDashboardMessageHandler(webview: vscode.Webview, output: vscode
       case 'hardRefresh':
         void hardRefreshProblems(output);
         break;
+      case 'clearProblems':
+        void clearProblems(output);
+        break;
       case 'report':
         void showDiagnosticsReport(output);
         break;
@@ -1578,6 +1922,22 @@ async function toDashboardModel(summary: DiagnosticsSummary): Promise<unknown> {
     .filter((candidate) => !candidate.managed && candidate.autoScore > 0 && candidate.commands.length > 0)
     .slice(0, 8);
 
+  const config = vscode.workspace.getConfiguration('problemsCleaner');
+  const refreshTasksEnabled = config.get<boolean>('refreshTasks', false);
+  const clearedTaskNames = getAllowedTaskNames();
+  let diagnosticTasks: { name: string; source: string; count: number; matchedBy: string; allowed: boolean }[] = [];
+
+  if (refreshTasksEnabled) {
+    const tasks = await fetchDiagnosticTasks();
+    diagnosticTasks = tasks.map((entry) => ({
+      name: entry.task.name,
+      source: entry.source,
+      count: entry.diagnosticCount,
+      matchedBy: entry.matchedBy,
+      allowed: clearedTaskNames.some((n) => n.toLowerCase() === entry.task.name.toLowerCase())
+    }));
+  }
+
   return {
     summary: {
       total: summary.total,
@@ -1604,7 +1964,9 @@ async function toDashboardModel(summary: DiagnosticsSummary): Promise<unknown> {
       id: extension.id,
       label: extension.label,
       commands: extension.commands
-    }))
+    })),
+    refreshTasksEnabled,
+    diagnosticTasks
   };
 }
 

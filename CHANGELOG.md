@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.1.3
+
+- Added **Clear Problems** command that kills stalled task processes and re-executes allowed tasks to purge stale problemMatcher diagnostics.
+- Added `problemsCleaner.clearedTasks` setting to control which tasks Clear Problems is allowed to restart.
+- Dashboard now shows which diagnostic tasks are in the clearedTasks allow list.
+- Added `problemsCleaner.refreshTasks` setting to optionally re-execute tasks during Refresh Problems.
+- Dashboard visual indicators for tasks eligible (✓) and blocked (✗) by the clearedTasks list.
+
 ## 0.1.2
 
 - Fixed diagnostics-change updates so the status bar and dashboard refresh when VS Code diagnostics change.
