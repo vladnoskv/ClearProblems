@@ -3,10 +3,12 @@
 ## 0.1.3
 
 - Added **Clear Problems** command that kills stalled task processes and re-executes allowed tasks to purge stale problemMatcher diagnostics.
+- Added **Settings** interactive webview to configure all extension options visually (provider commands, cleared tasks, behavior toggles).
 - Added `problemsCleaner.clearedTasks` setting to control which tasks Clear Problems is allowed to restart.
-- Dashboard now shows which diagnostic tasks are in the clearedTasks allow list.
 - Added `problemsCleaner.refreshTasks` setting to optionally re-execute tasks during Refresh Problems.
-- Dashboard visual indicators for tasks eligible (✓) and blocked (✗) by the clearedTasks list.
+- Dashboard now shows which diagnostic tasks are in the clearedTasks allow list with visual indicators.
+- Fixed background/watch task handling so Clear Problems and Refresh Problems don't hang on tasks that never exit.
+- Tightened task-to-diagnostic matching to prefer running tasks and use word-boundary matching for non-running tasks.
 
 ## 0.1.2
 

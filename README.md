@@ -24,7 +24,8 @@ VS Code diagnostics are owned by the extension or task that created them. A thir
 - provide a one-click hard refresh via **Restart Extension Host** or **Reload Window**;
 - add Problems toolbar buttons and a status-bar button for quick access;
 - **Clear Problems** — kill stalled task processes and re-execute allowed tasks to purge stale problemMatcher diagnostics;
-- detect which workspace tasks own current diagnostics and show allowed/blocked status in the dashboard.
+- detect which workspace tasks own current diagnostics and show allowed/blocked status in the dashboard;
+- interactive **Settings** webview to configure all extension options visually without editing JSON.
 
 ## Clear Problems — fixing stale task diagnostics
 
@@ -75,6 +76,7 @@ Cancellation is cooperative. Problems Cleaner stops before starting the next saf
 
 - `Problems Cleaner: Refresh Problems`
 - `Problems Cleaner: Clear Problems`
+- `Problems Cleaner: Settings`
 - `Problems Cleaner: Hard Refresh Problems (Restart Extension Host)`
 - `Problems Cleaner: Cancel Operation`
 - `Problems Cleaner: Show Diagnostics Report`
@@ -91,6 +93,7 @@ Cancellation is cooperative. Problems Cleaner stops before starting the next saf
 - Use **Show Diagnostics Report** for a detailed source and stale-file report.
 - Use **Hard Refresh** when diagnostics remain stuck after a soft refresh.
 - Use **Clear Problems** to kill stalled task processes and re-execute allowed tasks, cleaning stale problemMatcher diagnostics.
+- Use **Settings** to open the interactive settings editor where you can manage provider commands, cleared tasks, and behavior toggles without editing JSON.
 - Use **Setup Providers** to scan installed extensions and add likely diagnostic providers.
 - Use **Cancel Operation** from the progress notification or status-bar hover UI to stop an in-flight Problems Cleaner refresh at the next safe boundary.
 - Use each provider's **Refresh** button to run only that provider's configured refresh/restart commands.
@@ -103,6 +106,8 @@ Refreshes only run when the user requests them. There is no file watcher auto-re
 Manual refresh does not open or focus the Problems panel unless `problemsCleaner.openProblemsAfterRefresh` is explicitly enabled.
 
 ## Settings
+
+All settings can be configured through the interactive **Settings** webview (`Problems Cleaner: Settings`) or by editing `settings.json` directly.
 
 ```jsonc
 {

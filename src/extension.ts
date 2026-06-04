@@ -109,7 +109,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('problemsCleaner.addExtensionFromContext', (item) => addExtensionFromContext(item, output)),
     vscode.commands.registerCommand('problemsCleaner.refreshProviderFromProblem', (item) => refreshProviderFromProblem(item, output)),
     vscode.commands.registerCommand('problemsCleaner.hardRefreshProviderFromProblem', (item) => hardRefreshProviderFromProblem(item, output)),
-    vscode.commands.registerCommand('problemsCleaner.clearProblems', () => clearProblems(output))
+    vscode.commands.registerCommand('problemsCleaner.clearProblems', () => clearProblems(output)),
+    vscode.commands.registerCommand('problemsCleaner.openSettings', () => openSettings(context.extensionUri, output))
   );
 
   setupStatusBar(context);
@@ -1582,6 +1583,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     <button id="addExtension" class="secondary">Add Installed Extension</button>
     <button id="hardRefresh" class="secondary">Hard Refresh</button>
     <button id="clearProblems" class="secondary">Clear Problems</button>
+    <button id="settings" class="secondary">Settings</button>
   </div>
 
   <div class="stats">
@@ -1614,6 +1616,7 @@ function renderDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     document.getElementById('addExtension').addEventListener('click', () => vscode.postMessage({ command: 'addExtension' }));
     document.getElementById('hardRefresh').addEventListener('click', () => vscode.postMessage({ command: 'hardRefresh' }));
     document.getElementById('clearProblems').addEventListener('click', () => vscode.postMessage({ command: 'clearProblems' }));
+    document.getElementById('settings').addEventListener('click', () => vscode.postMessage({ command: 'openSettings' }));
 
     window.addEventListener('message', (event) => {
       if (event.data.type !== 'model') {
@@ -1855,6 +1858,300 @@ class ProblemsCleanerPanelDashboard {
 
 let panelDashboard: ProblemsCleanerPanelDashboard | undefined;
 
+class ProblemsCleanerSettings {
+  private panel: vscode.WebviewPanel | undefined;
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly output: vscode.LogOutputChannel
+  ) {}
+
+  show(): void {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      return;
+    }
+
+    this.panel = vscode.window.createWebviewPanel(
+      'problemsCleaner.settings',
+      'Problems Cleaner Settings',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        localResourceRoots: [this.extensionUri],
+        retainContextWhenHidden: true
+      }
+    );
+
+    this.panel.webview.html = renderSettingsHtml(this.panel.webview, this.extensionUri);
+    this.panel.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+
+    this.output.info('Settings panel opened.');
+  }
+
+  private async handleMessage(message: { command: string; key?: string; value?: unknown }): Promise<void> {
+    const config = vscode.workspace.getConfiguration('problemsCleaner');
+
+    switch (message.command) {
+      case 'loadSettings': {
+        const data = {
+          providerRefreshCommands: config.get<string[]>('providerRefreshCommands', []),
+          clearedTasks: config.get<string[]>('clearedTasks', []),
+          refreshTasks: config.get<boolean>('refreshTasks', false),
+          hardRefreshMode: config.get<'restartExtensionHost' | 'reloadWindow'>('hardRefreshMode', 'restartExtensionHost'),
+          showStatusBarButton: config.get<boolean>('showStatusBarButton', true),
+          saveAllBeforeRefresh: config.get<boolean>('saveAllBeforeRefresh', false),
+          openProblemsAfterRefresh: config.get<boolean>('openProblemsAfterRefresh', false),
+          showSetupOnFirstInstall: config.get<boolean>('showSetupOnFirstInstall', true)
+        };
+        await this.panel?.webview.postMessage({ type: 'settingsModel', data });
+        break;
+      }
+      case 'updateBoolean': {
+        if (typeof message.key === 'string' && typeof message.value === 'boolean') {
+          await config.update(message.key, message.value, vscode.ConfigurationTarget.Workspace);
+          this.output.info(`Settings: ${message.key} = ${message.value}`);
+        }
+        break;
+      }
+      case 'updateString': {
+        if (typeof message.key === 'string' && typeof message.value === 'string') {
+          await config.update(message.key, message.value, vscode.ConfigurationTarget.Workspace);
+          this.output.info(`Settings: ${message.key} = ${message.value}`);
+        }
+        break;
+      }
+      case 'updateArray': {
+        if (typeof message.key === 'string' && Array.isArray(message.value)) {
+          await config.update(message.key, message.value, vscode.ConfigurationTarget.Workspace);
+          this.output.info(`Settings: ${message.key} updated with ${message.value.length} item(s).`);
+        }
+        break;
+      }
+    }
+  }
+}
+
+function openSettings(extensionUri: vscode.Uri, output: vscode.LogOutputChannel): void {
+  const settings = new ProblemsCleanerSettings(extensionUri, output);
+  settings.show();
+}
+
+function renderSettingsHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+  const nonce = getNonce();
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <style>
+    body {
+      background: var(--vscode-editor-background);
+      color: var(--vscode-foreground);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { font-size: 18px; margin: 0 0 20px; }
+    h2 { font-size: 14px; margin: 24px 0 10px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 6px; }
+    .section { margin-bottom: 20px; }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-weight: 600; margin-bottom: 4px; }
+    .desc { color: var(--vscode-descriptionForeground); font-size: 12px; margin-bottom: 6px; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+    input[type="text"], select {
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border);
+      color: var(--vscode-input-foreground);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      padding: 4px 8px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    input[type="text"]:focus, select:focus {
+      border-color: var(--vscode-focusBorder);
+      outline: none;
+    }
+    input[type="checkbox"] { margin: 0; }
+    button {
+      background: var(--vscode-button-background);
+      border: 1px solid var(--vscode-button-border, transparent);
+      color: var(--vscode-button-foreground);
+      cursor: pointer;
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      line-height: 1.4;
+      padding: 4px 10px;
+    }
+    button:hover { background: var(--vscode-button-hoverBackground); }
+    button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+    button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    button.danger { background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); border-color: var(--vscode-inputValidation-errorBorder); }
+    .item-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .item-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); font-size: 12px; }
+    .add-row { margin-top: 8px; }
+    .status { color: var(--vscode-inputValidation-infoForeground); font-size: 12px; margin-top: 4px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Problems Cleaner Settings</h1>
+
+  <div class="section">
+    <h2>Diagnostic Provider Commands</h2>
+    <p class="desc">Command IDs run during soft refresh to restart language servers and linters.</p>
+    <div id="providerCommands"></div>
+    <div class="add-row">
+      <div class="row">
+        <input type="text" id="newProviderCommand" placeholder="e.g. eslint.restart" style="flex:1">
+        <button id="addProviderCommand">Add</button>
+      </div>
+    </div>
+    <div class="status" id="providerStatus"></div>
+  </div>
+
+  <div class="section">
+    <h2>Cleared Tasks</h2>
+    <p class="desc">Task names that Clear Problems is allowed to kill and restart. Must match task labels from tasks.json exactly.</p>
+    <div id="clearedTasksList"></div>
+    <div class="add-row">
+      <div class="row">
+        <input type="text" id="newClearedTask" placeholder="e.g. tsc: watch - tsconfig.json" style="flex:1">
+        <button id="addClearedTask">Add</button>
+      </div>
+    </div>
+    <div class="status" id="clearedTasksStatus"></div>
+  </div>
+
+  <div class="section">
+    <h2>Behavior</h2>
+    <div class="field">
+      <label><input type="checkbox" id="refreshTasks"> Re-execute tasks during Refresh Problems</label>
+      <p class="desc">When enabled, Refresh Problems will also re-execute workspace tasks whose problemMatchers generated current diagnostics.</p>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="showStatusBarButton"> Show status bar button</label>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="saveAllBeforeRefresh"> Save all files before refresh</label>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="openProblemsAfterRefresh"> Open Problems panel after refresh</label>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="showSetupOnFirstInstall"> Prompt setup on first install</label>
+    </div>
+    <div class="field">
+      <label for="hardRefreshMode">Hard refresh strategy</label>
+      <select id="hardRefreshMode">
+        <option value="restartExtensionHost">Restart Extension Host</option>
+        <option value="reloadWindow">Reload Window</option>
+      </select>
+      <p class="desc">Restart Extension Host is less disruptive. Reload Window is the fallback.</p>
+    </div>
+  </div>
+
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+
+    window.addEventListener('message', (event) => {
+      if (event.data.type !== 'settingsModel') { return; }
+      const d = event.data.data;
+
+      document.getElementById('refreshTasks').checked = d.refreshTasks;
+      document.getElementById('showStatusBarButton').checked = d.showStatusBarButton;
+      document.getElementById('saveAllBeforeRefresh').checked = d.saveAllBeforeRefresh;
+      document.getElementById('openProblemsAfterRefresh').checked = d.openProblemsAfterRefresh;
+      document.getElementById('showSetupOnFirstInstall').checked = d.showSetupOnFirstInstall;
+      document.getElementById('hardRefreshMode').value = d.hardRefreshMode;
+
+      renderArrayItems('providerCommands', d.providerRefreshCommands, 'providerCommands');
+      renderArrayItems('clearedTasksList', d.clearedTasks, 'clearedTasks');
+    });
+
+    function renderArrayItems(containerId, items, configKey) {
+      const container = document.getElementById(containerId);
+      container.replaceChildren();
+      if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'desc';
+        empty.textContent = 'No entries.';
+        container.appendChild(empty);
+        return;
+      }
+      for (let i = 0; i < items.length; i++) {
+        const row = document.createElement('div');
+        row.className = 'item-row';
+        const span = document.createElement('span');
+        span.textContent = items[i];
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'danger';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Remove';
+        (function(idx) {
+          removeBtn.addEventListener('click', () => {
+            const updated = items.filter((_, j) => j !== idx);
+            vscode.postMessage({ command: 'updateArray', key: configKey, value: updated });
+            renderArrayItems(containerId, updated, configKey);
+          });
+        })(i);
+        row.append(span, removeBtn);
+        container.appendChild(row);
+      }
+    }
+
+    function addItem(inputId, containerId, configKey, statusId) {
+      const input = document.getElementById(inputId);
+      const value = input.value.trim();
+      if (!value) { return; }
+      const items = Array.from(document.getElementById(containerId).querySelectorAll('.item-row span')).map(s => s.textContent);
+      items.push(value);
+      vscode.postMessage({ command: 'updateArray', key: configKey, value: items });
+      const status = document.getElementById(statusId);
+      status.textContent = 'Added ' + value;
+      setTimeout(() => { status.textContent = ''; }, 2000);
+      input.value = '';
+      renderArrayItems(containerId, items, configKey);
+    }
+
+    document.getElementById('addProviderCommand').addEventListener('click', () => {
+      addItem('newProviderCommand', 'providerCommands', 'providerRefreshCommands', 'providerStatus');
+    });
+    document.getElementById('addClearedTask').addEventListener('click', () => {
+      addItem('newClearedTask', 'clearedTasksList', 'clearedTasks', 'clearedTasksStatus');
+    });
+
+    document.getElementById('refreshTasks').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateBoolean', key: 'refreshTasks', value: this.checked });
+    });
+    document.getElementById('showStatusBarButton').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateBoolean', key: 'showStatusBarButton', value: this.checked });
+    });
+    document.getElementById('saveAllBeforeRefresh').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateBoolean', key: 'saveAllBeforeRefresh', value: this.checked });
+    });
+    document.getElementById('openProblemsAfterRefresh').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateBoolean', key: 'openProblemsAfterRefresh', value: this.checked });
+    });
+    document.getElementById('showSetupOnFirstInstall').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateBoolean', key: 'showSetupOnFirstInstall', value: this.checked });
+    });
+    document.getElementById('hardRefreshMode').addEventListener('change', function() {
+      vscode.postMessage({ command: 'updateString', key: 'hardRefreshMode', value: this.value });
+    });
+
+    vscode.postMessage({ command: 'loadSettings' });
+  </script>
+</body>
+</html>`;
+}
+
 function registerDashboardMessageHandler(webview: vscode.Webview, output: vscode.LogOutputChannel): void {
   webview.onDidReceiveMessage((message: { command?: string; id?: string; refreshCommand?: string }) => {
     switch (message.command) {
@@ -1866,6 +2163,11 @@ function registerDashboardMessageHandler(webview: vscode.Webview, output: vscode
         break;
       case 'clearProblems':
         void clearProblems(output);
+        break;
+      case 'openSettings':
+        if (extensionContext) {
+          openSettings(extensionContext.extensionUri, output);
+        }
         break;
       case 'report':
         void showDiagnosticsReport(output);

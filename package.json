@@ -129,6 +129,15 @@
           "light": "resources/icons/problems-cleaner-light.png",
           "dark": "resources/icons/problems-cleaner-dark.png"
         }
+      },
+      {
+        "command": "problemsCleaner.openSettings",
+        "title": "Problems Cleaner: Settings",
+        "category": "Problems Cleaner",
+        "icon": {
+          "light": "resources/icons/problems-cleaner-light.png",
+          "dark": "resources/icons/problems-cleaner-dark.png"
+        }
       }
     ],
     "viewsContainers": {
@@ -179,6 +188,9 @@
         },
         {
           "command": "problemsCleaner.clearProblems"
+        },
+        {
+          "command": "problemsCleaner.openSettings"
         }
       ],
       "extension/context": [
@@ -224,6 +236,11 @@
           "command": "problemsCleaner.clearProblems",
           "when": "view == workbench.panel.markers.view || view == problemsCleaner.dashboard",
           "group": "navigation@104"
+        },
+        {
+          "command": "problemsCleaner.openSettings",
+          "when": "view == problemsCleaner.dashboard",
+          "group": "navigation@105"
         }
       ]
     },
