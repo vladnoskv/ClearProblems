@@ -369,33 +369,8 @@ async function clearProblems(output: vscode.LogOutputChannel): Promise<void> {
 
         try {
           output.info(`Clear Problems: restarting allowed task "${entry.task.name}" (${entry.diagnosticCount} diagnostics from "${entry.source}").`);
-          const execution = await vscode.tasks.executeTask(entry.task);
-
-          await new Promise<void>((resolve, reject) => {
-            const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
-              if (e.execution === execution) {
-                subscription.dispose();
-                if (e.exitCode !== undefined && e.exitCode !== 0) {
-                  output.debug(`Task "${entry.task.name}" exited with code ${e.exitCode}.`);
-                }
-                resolve();
-              }
-            });
-
-            const cancelSub = token?.onCancellationRequested(() => {
-              subscription.dispose();
-              cancelSub?.dispose();
-              reject(new OperationCancelledError('Clear Problems'));
-            });
-
-            setTimeout(() => {
-              subscription.dispose();
-              cancelSub?.dispose();
-              output.debug(`Task "${entry.task.name}" did not complete within timeout.`);
-              resolve();
-            }, 120000);
-          });
-
+          await vscode.tasks.executeTask(entry.task);
+          await waitForTaskOutput(entry.task, output, token, 'Clear Problems');
           restarted += 1;
         } catch (error) {
           if (isOperationCancelledError(error)) {
@@ -600,12 +575,27 @@ async function fetchDiagnosticTasks(): Promise<DiagnosticTask[]> {
   }
 
   const tasks = await vscode.tasks.fetchTasks();
+  const runningNames = new Set(
+    vscode.tasks.taskExecutions.map((exec) => exec.task.name.toLowerCase())
+  );
   const matched = new Map<string, DiagnosticTask>();
+
+  function wordBoundaryMatch(source: string, haystack: string): boolean {
+    const lower = source.toLowerCase();
+    const hay = haystack.toLowerCase();
+    if (hay === lower) { return true; }
+    const idx = hay.indexOf(lower);
+    if (idx === -1) { return false; }
+    const before = idx === 0 || /\W/.test(hay[idx - 1]);
+    const after = idx + lower.length >= hay.length || /\W/.test(hay[idx + lower.length]);
+    return before && after;
+  }
 
   for (const task of tasks) {
     const taskName = task.name.toLowerCase();
     const taskSource = task.source.toLowerCase();
     const matchers = (task.problemMatchers ?? []).map((m) => m.replace(/^\$/, '').toLowerCase());
+    const isRunning = runningNames.has(taskName);
 
     for (const [diagSource, count] of diagnosticSources) {
       const key = `${task.name}|${diagSource}`;
@@ -615,11 +605,11 @@ async function fetchDiagnosticTasks(): Promise<DiagnosticTask[]> {
 
       const lower = diagSource.toLowerCase();
 
-      if (taskName === lower || taskName.includes(lower) || lower.includes(taskName)) {
+      if (isRunning && (taskName.includes(lower) || lower.includes(taskName))) {
         matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'name' });
-      } else if (taskSource && (taskSource === lower || taskSource.includes(lower) || lower.includes(taskSource))) {
-        matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'source' });
-      } else if (matchers.some((m) => m === lower || lower.includes(m) || m.includes(lower))) {
+      } else if (!isRunning && wordBoundaryMatch(diagSource, task.name)) {
+        matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'name' });
+      } else if (matchers.some((m) => m === lower || wordBoundaryMatch(lower, m))) {
         matched.set(key, { task, source: diagSource, diagnosticCount: count, matchedBy: 'problemMatcher' });
       }
     }
@@ -640,33 +630,8 @@ async function executeDiagnosticTasks(
 
     try {
       output.info(`Re-executing task "${entry.task.name}" (matched by ${entry.matchedBy}) to refresh ${entry.diagnosticCount} diagnostic(s) from "${entry.source}".`);
-      const execution = await vscode.tasks.executeTask(entry.task);
-
-      await new Promise<void>((resolve, reject) => {
-        const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
-          if (e.execution === execution) {
-            subscription.dispose();
-            if (e.exitCode !== undefined && e.exitCode !== 0) {
-              output.debug(`Task "${entry.task.name}" exited with code ${e.exitCode}. Diagnostics may still be stale.`);
-            }
-            resolve();
-          }
-        });
-
-        const cancelSub = token?.onCancellationRequested(() => {
-          subscription.dispose();
-          cancelSub?.dispose();
-          reject(new OperationCancelledError('Task Refresh'));
-        });
-
-        setTimeout(() => {
-          subscription.dispose();
-          cancelSub?.dispose();
-          output.debug(`Task "${entry.task.name}" did not complete within timeout.`);
-          resolve();
-        }, 120000);
-      });
-
+      await vscode.tasks.executeTask(entry.task);
+      await waitForTaskOutput(entry.task, output, token, 'Task Refresh');
       result.executed.push(entry.task.name);
     } catch (error) {
       if (isOperationCancelledError(error)) {
@@ -678,6 +643,43 @@ async function executeDiagnosticTasks(
   }
 
   return result;
+}
+
+async function waitForTaskOutput(
+  task: vscode.Task,
+  output: vscode.LogOutputChannel,
+  token: vscode.CancellationToken | undefined,
+  label: string
+): Promise<void> {
+  if (task.isBackground) {
+    output.debug(`Task "${task.name}" is a background task; waiting for initial compilation.`);
+    await sleep(8000, token, label);
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const subscription = vscode.tasks.onDidEndTaskProcess((e) => {
+      if (e.execution.task.name === task.name && e.execution.task.source === task.source) {
+        subscription.dispose();
+        if (e.exitCode !== undefined && e.exitCode !== 0) {
+          output.debug(`Task "${task.name}" exited with code ${e.exitCode}.`);
+        }
+        resolve();
+      }
+    });
+
+    const cancelSub = token?.onCancellationRequested(() => {
+      subscription.dispose();
+      cancelSub?.dispose();
+      reject(new OperationCancelledError(label));
+    });
+
+    setTimeout(() => {
+      subscription.dispose();
+      cancelSub?.dispose();
+      reject(new Error(`Task "${task.name}" timed out after 120s.`));
+    }, 120000);
+  });
 }
 
 async function pokeOpenDocuments(output: vscode.LogOutputChannel, token?: vscode.CancellationToken): Promise<void> {
